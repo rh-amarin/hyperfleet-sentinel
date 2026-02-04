@@ -23,7 +23,7 @@ data:
 
     # HyperFleet API configuration
     hyperfleet_api:
-      endpoint: {{ .Values.config.hyperfleetApi.baseUrl }}
+      endpoint: {{ tpl .Values.config.hyperfleetApi.baseUrl . }}
       timeout: {{ .Values.config.hyperfleetApi.timeout }}
 
     {{- if .Values.config.messageData }}
@@ -64,6 +64,12 @@ data:
         {{- end }}
         {{- if .Values.broker.googlepubsub.numGoroutines }}
         num_goroutines: {{ .Values.broker.googlepubsub.numGoroutines }}
+        {{- end }}
+        {{- if hasKey .Values.broker.googlepubsub "createTopicIfMissing" }}
+        create_topic_if_missing: {{ .Values.broker.googlepubsub.createTopicIfMissing }}
+        {{- end }}
+        {{- if hasKey .Values.broker.googlepubsub "createSubscriptionIfMissing" }}
+        create_subscription_if_missing: {{ .Values.broker.googlepubsub.createSubscriptionIfMissing }}
         {{- end }}
       {{- end }}
 

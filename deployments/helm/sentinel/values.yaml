@@ -87,7 +87,8 @@ config:
   # HyperFleet API configuration
   hyperfleetApi:
     # Use in-cluster service name for API endpoint
-    baseUrl: http://hyperfleet-api.hyperfleet-system.svc.cluster.local:8080
+    # Template will be evaluated to use the release namespace
+    baseUrl: 'http://hyperfleet-api.{{ .Release.Namespace }}.svc.cluster.local:8000'
     timeout: 5s
 
   # CloudEvents data payload configuration
@@ -104,7 +105,7 @@ config:
 # For more details, see: https://github.com/openshift-hyperfleet/hyperfleet-broker
 broker:
   # Broker type: rabbitmq or googlepubsub
-  type: rabbitmq
+  type: googlepubsub
 
   # Topic name for broker publishing
   # This is the full topic name where events will be published
@@ -122,11 +123,14 @@ broker:
 
   # Google Pub/Sub configuration (alternative to RabbitMQ)
   # projectId is written to broker.yaml ConfigMap (not Secret - it's not sensitive)
-  # Uncomment and configure when using Pub/Sub
-  # googlepubsub:
-  #   projectId: your-gcp-project-id
-  #   maxOutstandingMessages: 1000
-  #   numGoroutines: 10
+  googlepubsub:
+    projectId: your-gcp-project-id
+    maxOutstandingMessages: 1000
+    numGoroutines: 10
+    # Auto-creation flags (default: false - manual creation required)
+    # Set to true to automatically create topics/subscriptions if they don't exist
+    createTopicIfMissing: true
+    createSubscriptionIfMissing: true
 
 # Subscriber configuration (optional)
 subscriber:
