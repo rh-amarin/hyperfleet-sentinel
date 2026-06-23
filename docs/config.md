@@ -35,6 +35,9 @@ clients:
     base_url: "http://hyperfleet-api:8000"
     version: "v1"
     timeout: "10s"
+    # authorization:       # optional — omit to send no Authorization header
+    #   type: static       # "static" or "kubernetes"
+    #   token: ""          # required for type=static; use HYPERFLEET_API_AUTH_TOKEN env var
   broker:
     topic: ""
 
@@ -69,6 +72,35 @@ message_data:
 - `base_url` (string, required): Base URL for HyperFleet API requests.
 - `version` (string, optional): API version. Default: `v1`.
 - `timeout` (duration string, optional): HTTP client timeout. Default: `10s`.
+- `authorization` (object, optional): Bearer token configuration for outbound API requests. See [Authorization](#authorization-clientshyperfleet_apiauthorization).
+
+#### Authorization (`clients.hyperfleet_api.authorization`)
+
+When set, the sentinel injects `Authorization: Bearer <token>` on every request to the HyperFleet API. Omit the block entirely to send no authorization header (default).
+
+- `type` (string, required): Token source. One of `static` or `kubernetes`.
+- `token` (string, required when `type=static`): The literal bearer token. Set via the `HYPERFLEET_API_AUTH_TOKEN` env var to avoid storing secrets in the config file.
+
+**`type: static`** — uses the literal `token` value:
+
+```yaml
+clients:
+  hyperfleet_api:
+    base_url: http://hyperfleet-api:8000
+    authorization:
+      type: static
+      token: "my-api-token"   # or set via HYPERFLEET_API_AUTH_TOKEN
+```
+
+**`type: kubernetes`** — reads the pod's projected ServiceAccount token from `/var/run/secrets/kubernetes.io/serviceaccount/token`. Kubernetes mounts this automatically; no extra fields required:
+
+```yaml
+clients:
+  hyperfleet_api:
+    base_url: http://hyperfleet-api:8000
+    authorization:
+      type: kubernetes
+```
 
 ### Broker (`clients.broker`)
 
@@ -130,6 +162,8 @@ All deployment overrides use the `HYPERFLEET_` prefix unless noted.
 - `HYPERFLEET_API_BASE_URL` -> `clients.hyperfleet_api.base_url`
 - `HYPERFLEET_API_VERSION` -> `clients.hyperfleet_api.version`
 - `HYPERFLEET_API_TIMEOUT` -> `clients.hyperfleet_api.timeout`
+- `HYPERFLEET_API_AUTH_TYPE` -> `clients.hyperfleet_api.authorization.type`
+- `HYPERFLEET_API_AUTH_TOKEN` -> `clients.hyperfleet_api.authorization.token`
 
 **Broker**
 

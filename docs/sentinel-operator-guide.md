@@ -24,7 +24,8 @@ This comprehensive guide teaches operators how to deploy, configure, and operate
    - [Optional Fields](#33-optional-fields)
    - [Resource Selector](#34-resource-selector)
    - [Message Data (CEL Expressions)](#35-message-data-cel-expressions)
-   - [Broker Configuration](#36-broker-configuration)
+   - [HyperFleet API Authorization](#36-hyperfleet-api-authorization)
+   - [Broker Configuration](#37-broker-configuration)
 4. [Deployment Checklist](#4-deployment-checklist)
 5. [Additional Resources](#additional-resources)
 
@@ -431,7 +432,49 @@ The `message_data` configuration produces CloudEvents with the following structu
 }
 ```
 
-### 3.6 Broker Configuration
+### 3.6 HyperFleet API Authorization
+
+The sentinel can authenticate outbound requests to the HyperFleet API with a Bearer token. Set the `authorization` block under `clients.hyperfleet_api`. Omit it entirely to send no Authorization header (the default).
+
+Two token sources are supported:
+
+**`type: static`** — a literal token value. Use the `HYPERFLEET_API_AUTH_TOKEN` environment variable to avoid embedding secrets in the config file:
+
+```yaml
+clients:
+  hyperfleet_api:
+    base_url: http://hyperfleet-api:8000
+    authorization:
+      type: static
+      token: "my-api-token"
+```
+
+Or inject via Helm `env`:
+
+```yaml
+env:
+  - name: HYPERFLEET_API_AUTH_TOKEN
+    valueFrom:
+      secretKeyRef:
+        name: hyperfleet-api-credentials
+        key: token
+```
+
+**`type: kubernetes`** — reads the pod's projected ServiceAccount token from the standard mount path (`/var/run/secrets/kubernetes.io/serviceaccount/token`). Kubernetes mounts this automatically — no extra configuration is needed:
+
+```yaml
+clients:
+  hyperfleet_api:
+    base_url: http://hyperfleet-api:8000
+    authorization:
+      type: kubernetes
+```
+
+> **Note:** If `automountServiceAccountToken` was explicitly disabled on the pod or ServiceAccount, re-enable it via the chart's `serviceAccount.automountServiceAccountToken: true` value.
+
+For the full field reference and environment variable overrides, see [config.md — Authorization](config.md#authorization-clientshyperfleet_apiauthorization).
+
+### 3.7 Broker Configuration
 
 Broker configuration is managed by the [hyperfleet-broker library](https://github.com/openshift-hyperfleet/hyperfleet-broker). Configuration is split between:
 
@@ -684,7 +727,7 @@ For detailed deployment guidance, see [docs/running-sentinel.md](running-sentine
 | **Events not published, resources not found** | Resource selector mismatch | Verify `resource_selector` matches resource labels. Empty selector watches ALL resources. Check logs: `kubectl logs -n hyperfleet-system -l app.kubernetes.io/name=sentinel`                                                                                                                                             |
 | **Events not published, resources found but skipped**                                                                           | Decision result is false | Normal behavior (reason: `"message decision result is false"`). Events publish when the `message_decision` result expression evaluates to `true`. With the default config: new resource (`generation==1 && !reconciled`), generation mismatch, reconciled and stale >30m, or not reconciled and debounced >10s.                                          |
 | **API connection errors, DNS lookup fails**                                                                                  | Wrong service name or namespace | Verify endpoint format: `http://<service>.<namespace>.svc.cluster.local:8000`. Check API is running: `kubectl get pods -n hyperfleet-system -l app=hyperfleet-api`                                                                                                                                                       |
-| **API returns 401 Unauthorized**                                                                                             | Missing authentication | Add auth headers to `hyperfleet_api` config if API requires authentication.                                                                                                                                                                                                                                              |
+| **API returns 401 Unauthorized**                                                                                             | Missing or invalid authentication | Set `clients.hyperfleet_api.authorization` in the config. Use `type: static` with a token value (or `HYPERFLEET_API_AUTH_TOKEN` env var), or `type: kubernetes` to use the pod's mounted ServiceAccount token. See [HyperFleet API Authorization](#36-hyperfleet-api-authorization).                                     |
 | **API returns 404 Not Found**                                                                                                | Wrong API version in path | Verify endpoint uses correct API version: `/api/v1/clusters` or `/api/hyperfleet/v1/clusters`                                                                                                                                                                                                                            |
 | **Broker PermissionDenied (Pub/Sub)**                                                                                        | Missing publisher role | Grant role: `gcloud projects add-iam-policy-binding ${GCP_PROJECT} --role="roles/pubsub.publisher" --member="principal://iam.googleapis.com/..."`                                                                                                                                                                        |
 | **Broker Topic not found (Pub/Sub)**                                                                                         | Topic doesn't exist | Create topic: `gcloud pubsub topics create hyperfleet-prod-clusters --project=${GCP_PROJECT}`                                                                                                                                                                                                                            |
