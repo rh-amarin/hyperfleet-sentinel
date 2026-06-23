@@ -19,6 +19,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/openshift-hyperfleet/hyperfleet-broker/broker"
+	"github.com/openshift-hyperfleet/hyperfleet-sentinel/internal/auth"
 	"github.com/openshift-hyperfleet/hyperfleet-sentinel/internal/client"
 	"github.com/openshift-hyperfleet/hyperfleet-sentinel/internal/config"
 	"github.com/openshift-hyperfleet/hyperfleet-sentinel/internal/engine"
@@ -256,8 +257,19 @@ func runServe(
 	metrics.NewSentinelMetrics(registry, version)
 
 	// Initialize components
+	var tokenProvider auth.TokenProvider
+	if cfg.Clients.HyperFleetAPI.Authorization != nil {
+		p, authErr := auth.NewTokenProvider(cfg.Clients.HyperFleetAPI.Authorization)
+		if authErr != nil {
+			log.Errorf(ctx, "Failed to build authorization token provider: %v", authErr)
+			return fmt.Errorf("failed to build authorization token provider: %w", authErr)
+		}
+		tokenProvider = p
+	}
+
 	hyperfleetClient, err := client.NewHyperFleetClient(
 		cfg.Clients.HyperFleetAPI.BaseURL, cfg.Clients.HyperFleetAPI.Timeout, cfg.Sentinel.Name, version,
+		client.WithTokenProvider(tokenProvider),
 	)
 	if err != nil {
 		log.Errorf(ctx, "Failed to initialize OpenAPI client: %v", err)

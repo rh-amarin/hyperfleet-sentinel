@@ -1109,3 +1109,64 @@ func TestFetchResources_WithConditionFilterOnly(t *testing.T) {
 		t.Errorf("Expected search parameter %q, got %q", expectedSearch, receivedSearchParam)
 	}
 }
+
+// staticTokenProvider is a test helper implementing auth.TokenProvider.
+type staticTokenProvider struct{ token string }
+
+func (s *staticTokenProvider) GetToken(_ context.Context) (string, error) { return s.token, nil }
+
+// TestNewHyperFleetClient_Authorization verifies that the Authorization header is sent
+// when a token provider is configured, and absent when no provider is set.
+func TestNewHyperFleetClient_Authorization(t *testing.T) {
+	t.Run("static provider sends bearer token", func(t *testing.T) {
+		var receivedAuth string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			receivedAuth = r.Header.Get("Authorization")
+			response := createMockClusterList([]map[string]interface{}{})
+			w.Header().Set("Content-Type", "application/json")
+			if err := json.NewEncoder(w).Encode(response); err != nil {
+				t.Logf("Error encoding response: %v", err)
+			}
+		}))
+		defer server.Close()
+
+		c, err := NewHyperFleetClient(
+			server.URL, 10*time.Second, "test-sentinel", "test",
+			WithTokenProvider(&staticTokenProvider{token: "my-secret-token"}),
+		)
+		if err != nil {
+			t.Fatalf("NewHyperFleetClient: %v", err)
+		}
+
+		_, _ = c.FetchResources(context.Background(), ResourceTypeClusters, nil)
+
+		expected := "Bearer my-secret-token"
+		if receivedAuth != expected {
+			t.Errorf("Authorization header: got %q, want %q", receivedAuth, expected)
+		}
+	})
+
+	t.Run("nil provider sends no authorization header", func(t *testing.T) {
+		var receivedAuth string
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			receivedAuth = r.Header.Get("Authorization")
+			response := createMockClusterList([]map[string]interface{}{})
+			w.Header().Set("Content-Type", "application/json")
+			if err := json.NewEncoder(w).Encode(response); err != nil {
+				t.Logf("Error encoding response: %v", err)
+			}
+		}))
+		defer server.Close()
+
+		c, err := NewHyperFleetClient(server.URL, 10*time.Second, "test-sentinel", "test")
+		if err != nil {
+			t.Fatalf("NewHyperFleetClient: %v", err)
+		}
+
+		_, _ = c.FetchResources(context.Background(), ResourceTypeClusters, nil)
+
+		if receivedAuth != "" {
+			t.Errorf("expected no Authorization header, got %q", receivedAuth)
+		}
+	})
+}

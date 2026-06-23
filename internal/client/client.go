@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/cenkalti/backoff/v5"
+	"github.com/openshift-hyperfleet/hyperfleet-sentinel/internal/auth"
 	"github.com/openshift-hyperfleet/hyperfleet-sentinel/pkg/api/openapi"
 	"github.com/openshift-hyperfleet/hyperfleet-sentinel/pkg/logger"
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
@@ -43,26 +44,49 @@ const (
 
 // HyperFleetClient wraps the OpenAPI-generated client
 type HyperFleetClient struct {
-	apiClient *openapi.ClientWithResponses
-	log       logger.HyperFleetLogger
+	apiClient     *openapi.ClientWithResponses
+	log           logger.HyperFleetLogger
+	tokenProvider auth.TokenProvider // nil = no Authorization header
+}
+
+// ClientOption configures a HyperFleetClient.
+type ClientOption func(*HyperFleetClient)
+
+// WithTokenProvider sets a token provider that injects Authorization: Bearer <token>
+// on every outbound request.
+func WithTokenProvider(p auth.TokenProvider) ClientOption {
+	return func(c *HyperFleetClient) { c.tokenProvider = p }
 }
 
 // NewHyperFleetClient creates a new HyperFleet API client using OpenAPI-generated client.
 // sentinelName and version are used to build the User-Agent header sent with every request.
+// Optional ClientOption values (e.g. WithTokenProvider) configure additional behavior.
 func NewHyperFleetClient(
 	endpoint string, timeout time.Duration, sentinelName, version string,
+	opts ...ClientOption,
 ) (*HyperFleetClient, error) {
-	httpClient := &http.Client{
-		Timeout:   timeout,
-		Transport: otelhttp.NewTransport(http.DefaultTransport),
+	hc := &HyperFleetClient{log: logger.NewHyperFleetLogger()}
+	for _, opt := range opts {
+		opt(hc)
 	}
+	provider := hc.tokenProvider // captured for closure; nil = no auth
 
 	userAgent := fmt.Sprintf("hyperfleet-sentinel/%s (%s)", version, sentinelName)
 
 	client, err := openapi.NewClientWithResponses(endpoint,
-		openapi.WithHTTPClient(httpClient),
-		openapi.WithRequestEditorFn(func(_ context.Context, req *http.Request) error {
+		openapi.WithHTTPClient(&http.Client{
+			Timeout:   timeout,
+			Transport: otelhttp.NewTransport(http.DefaultTransport),
+		}),
+		openapi.WithRequestEditorFn(func(ctx context.Context, req *http.Request) error {
 			req.Header.Set("User-Agent", userAgent)
+			if provider != nil {
+				token, tokenErr := provider.GetToken(ctx)
+				if tokenErr != nil {
+					return fmt.Errorf("failed to get authorization token: %w", tokenErr)
+				}
+				req.Header.Set("Authorization", "Bearer "+token)
+			}
 			return nil
 		}),
 	)
@@ -71,10 +95,8 @@ func NewHyperFleetClient(
 		return nil, fmt.Errorf("failed to create OpenAPI client: %v", err)
 	}
 
-	return &HyperFleetClient{
-		apiClient: client,
-		log:       logger.NewHyperFleetLogger(),
-	}, nil
+	hc.apiClient = client
+	return hc, nil
 }
 
 // OwnerReference identifies the owner of a resource

@@ -79,11 +79,18 @@ type ClientsConfig struct {
 	Broker        *BrokerConfig        `yaml:"broker,omitempty" mapstructure:"broker"`
 }
 
+// HyperFleetAPIAuthConfig configures bearer token generation for API requests.
+type HyperFleetAPIAuthConfig struct {
+	Type  string `yaml:"type" mapstructure:"type"`             // "static" or "kubernetes"
+	Token string `yaml:"token,omitempty" mapstructure:"token"` // required for type=static
+}
+
 // HyperFleetAPIConfig defines the HyperFleet API client configuration
 type HyperFleetAPIConfig struct {
-	BaseURL string        `yaml:"base_url" mapstructure:"base_url"`
-	Version string        `yaml:"version,omitempty" mapstructure:"version"`
-	Timeout time.Duration `yaml:"timeout" mapstructure:"timeout"`
+	Authorization *HyperFleetAPIAuthConfig `yaml:"authorization,omitempty" mapstructure:"authorization"`
+	BaseURL       string                   `yaml:"base_url" mapstructure:"base_url"`
+	Version       string                   `yaml:"version,omitempty" mapstructure:"version"`
+	Timeout       time.Duration            `yaml:"timeout" mapstructure:"timeout"`
 }
 
 // BrokerConfig contains broker configuration
@@ -157,18 +164,20 @@ func NewSentinelConfig() *SentinelConfig {
 // Note: Uses "::" as key delimiter to avoid conflicts with dots in YAML keys
 // Complex types (maps, slices) are intentionally excluded — they cannot be expressed as scalar env vars.
 var viperKeyMappings = map[string]string{
-	"debug_config":                      "DEBUG_CONFIG",
-	"sentinel::name":                    "SENTINEL_NAME",
-	"log::level":                        "LOG_LEVEL",
-	"log::format":                       "LOG_FORMAT",
-	"log::output":                       "LOG_OUTPUT",
-	"clients::hyperfleet_api::base_url": "API_BASE_URL",
-	"clients::hyperfleet_api::version":  "API_VERSION",
-	"clients::hyperfleet_api::timeout":  "API_TIMEOUT",
-	"clients::broker::topic":            "BROKER_TOPIC",
-	"resource_type":                     "RESOURCE_TYPE",
-	"poll_interval":                     "POLL_INTERVAL",
-	"tracing_enabled":                   "TRACING_ENABLED",
+	"debug_config":                                  "DEBUG_CONFIG",
+	"sentinel::name":                                "SENTINEL_NAME",
+	"log::level":                                    "LOG_LEVEL",
+	"log::format":                                   "LOG_FORMAT",
+	"log::output":                                   "LOG_OUTPUT",
+	"clients::hyperfleet_api::base_url":             "API_BASE_URL",
+	"clients::hyperfleet_api::version":              "API_VERSION",
+	"clients::hyperfleet_api::timeout":              "API_TIMEOUT",
+	"clients::hyperfleet_api::authorization::type":  "API_AUTH_TYPE",
+	"clients::hyperfleet_api::authorization::token": "API_AUTH_TOKEN",
+	"clients::broker::topic":                        "BROKER_TOPIC",
+	"resource_type":                                 "RESOURCE_TYPE",
+	"poll_interval":                                 "POLL_INTERVAL",
+	"tracing_enabled":                               "TRACING_ENABLED",
 }
 
 // cliFlags defines mappings from CLI flag names to config paths
@@ -288,6 +297,14 @@ var fieldRemediations = map[string]fieldRemediation{
 		Env:  "HYPERFLEET_API_BASE_URL",
 		File: "clients.hyperfleet_api.base_url",
 	},
+	"clients.hyperfleet_api.authorization.type": {
+		Env:  "HYPERFLEET_API_AUTH_TYPE",
+		File: "clients.hyperfleet_api.authorization.type",
+	},
+	"clients.hyperfleet_api.authorization.token": {
+		Env:  "HYPERFLEET_API_AUTH_TOKEN",
+		File: "clients.hyperfleet_api.authorization.token",
+	},
 	"poll_interval": {
 		Flag: "--poll-interval",
 		Env:  "HYPERFLEET_POLL_INTERVAL",
@@ -353,6 +370,20 @@ func (c *SentinelConfig) Validate() error {
 
 	if c.Clients.HyperFleetAPI.BaseURL == "" {
 		return validationErr("clients.hyperfleet_api.base_url", "required")
+	}
+
+	if auth := c.Clients.HyperFleetAPI.Authorization; auth != nil {
+		switch auth.Type {
+		case "static":
+			if auth.Token == "" {
+				return validationErr("clients.hyperfleet_api.authorization.token", "required for type=static")
+			}
+		case "kubernetes":
+			// no extra fields required — reads the pod's mounted ServiceAccount token file
+		default:
+			return validationErr("clients.hyperfleet_api.authorization.type",
+				fmt.Sprintf("unsupported type %q (must be static or kubernetes)", auth.Type))
+		}
 	}
 
 	if c.PollInterval <= 0 {
@@ -441,15 +472,20 @@ func contains(slice []string, value string) bool {
 	return false
 }
 
-// RedactedCopy returns a deep copy of the config. Use this copy when logging
-// the merged configuration at startup so that any future sensitive fields are
-// never accidentally shared by reference.
-// Currently there are no sensitive params in the configuration, so this function is doing just a deep copy
+// RedactedCopy returns a deep copy of the config with sensitive fields masked.
+// Use this copy when logging the merged configuration at startup.
 func (c *SentinelConfig) RedactedCopy() *SentinelConfig {
 	cp := *c
 
 	if cp.Clients.HyperFleetAPI != nil {
 		api := *cp.Clients.HyperFleetAPI
+		if api.Authorization != nil {
+			authCopy := *api.Authorization
+			if authCopy.Token != "" {
+				authCopy.Token = "[redacted]"
+			}
+			api.Authorization = &authCopy
+		}
 		cp.Clients.HyperFleetAPI = &api
 	}
 
