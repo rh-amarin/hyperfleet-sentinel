@@ -3,8 +3,11 @@ package client
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strconv"
 	"strings"
 	"testing"
@@ -15,70 +18,125 @@ import (
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 )
 
-const testClustersAPIPath = "/api/hyperfleet/v1/clusters"
+const (
+	testClustersAPIPath     = "/api/hyperfleet/v1/clusters"
+	testCreatedTime         = "2025-01-01T09:00:00Z"
+	testUpdatedTime         = "2025-01-01T10:00:00Z"
+	testLastUpdatedTime     = "2025-01-01T12:00:00Z"
+	testUser                = "test-user@example.com"
+	testConditionStatusTrue = "True"
+	testReconciledFilter    = "status.conditions.Reconciled='False'"
+	testKindCluster         = "Cluster"
+	testKindNodePool        = "NodePool"
+	testLabelRegion         = "region"
+	testLabelEnv            = "env"
+	testLabelShard          = "shard"
+	testLabelValue          = "value"
+	testRegionUSEast        = "us-east"
 
-// createMockCluster creates a mock cluster response with all required fields
-func createMockCluster(id string) map[string]interface{} {
+	keyHref               = "href"
+	keyKind               = "kind"
+	keyName               = "name"
+	keyGeneration         = "generation"
+	keyCreatedTime        = "created_time"
+	keyUpdatedTime        = "updated_time"
+	keyCreatedBy          = "created_by"
+	keyUpdatedBy          = "updated_by"
+	keySpec               = "spec"
+	keyStatus             = "status"
+	keyConditions         = "conditions"
+	keyType               = "type"
+	keyLastTransitionTime = "last_transition_time"
+	keyLastUpdatedTime    = "last_updated_time"
+	keyObservedGeneration = "observed_generation"
+	keyPage               = "page"
+	keySize               = "size"
+	keyTotal              = "total"
+	keyItems              = "items"
+)
+
+func createMockCondition(condType, status string, observedGen int) map[string]interface{} {
+	return map[string]interface{}{
+		keyType:               condType,
+		keyStatus:             status,
+		keyCreatedTime:        testCreatedTime,
+		keyLastTransitionTime: testUpdatedTime,
+		keyLastUpdatedTime:    testLastUpdatedTime,
+		keyObservedGeneration: observedGen,
+	}
+}
+
+func createMockResource(id, kind string) map[string]interface{} {
 	return map[string]interface{}{
 		"id":           id,
-		"href":         "/api/hyperfleet/v1/clusters/" + id,
-		"kind":         "Cluster",
-		"name":         id,
-		"generation":   5,
-		"created_time": "2025-01-01T09:00:00Z",
-		"updated_time": "2025-01-01T10:00:00Z",
-		"created_by":   "test-user@example.com",
-		"updated_by":   "test-user@example.com",
-		"spec":         map[string]interface{}{},
-		"status": map[string]interface{}{
-			"conditions": []map[string]interface{}{
-				{
-					"type":                 "Reconciled",
-					"status":               "True",
-					"created_time":         "2025-01-01T09:00:00Z",
-					"last_transition_time": "2025-01-01T10:00:00Z",
-					"last_updated_time":    "2025-01-01T12:00:00Z",
-					"observed_generation":  5,
-				},
-				{
-					"type":                 "LastKnownReconciled",
-					"status":               "True",
-					"created_time":         "2025-01-01T09:00:00Z",
-					"last_transition_time": "2025-01-01T10:00:00Z",
-					"last_updated_time":    "2025-01-01T12:00:00Z",
-					"observed_generation":  5,
-				},
+		keyHref:        "/api/hyperfleet/v1/resources/" + id,
+		keyKind:        kind,
+		keyName:        id,
+		keyGeneration:  5,
+		keyCreatedTime: testCreatedTime,
+		keyUpdatedTime: testUpdatedTime,
+		keyCreatedBy:   testUser,
+		keyUpdatedBy:   testUser,
+		keySpec:        map[string]interface{}{},
+		keyStatus: map[string]interface{}{
+			keyConditions: []map[string]interface{}{
+				createMockCondition("Reconciled", testConditionStatusTrue, 5),
+				createMockCondition("LastKnownReconciled", testConditionStatusTrue, 5),
 			},
 		},
 	}
 }
 
-// createMockClusterList creates a mock ClusterList response
-func createMockClusterList(clusters []map[string]interface{}) map[string]interface{} {
+func createMockResourceWithOwner(
+	id, name, kind string, generation int, ownerID, ownerKind string,
+) map[string]interface{} {
+	r := map[string]interface{}{
+		"id":           id,
+		keyHref:        "/api/hyperfleet/v1/resources/" + id,
+		keyKind:        kind,
+		keyName:        name,
+		keyGeneration:  generation,
+		keyCreatedTime: testCreatedTime,
+		keyUpdatedTime: testUpdatedTime,
+		keyCreatedBy:   testUser,
+		keyUpdatedBy:   testUser,
+		"owner_references": map[string]interface{}{
+			"id":    ownerID,
+			keyKind: ownerKind,
+			keyHref: "/api/hyperfleet/v1/resources/" + ownerID,
+		},
+		keySpec: map[string]interface{}{},
+		keyStatus: map[string]interface{}{
+			keyConditions: []map[string]interface{}{
+				createMockCondition("Reconciled", testConditionStatusTrue, generation),
+				createMockCondition("LastKnownReconciled", testConditionStatusTrue, generation),
+			},
+		},
+	}
+	return r
+}
+
+func createMockResourceList(items []map[string]interface{}, page, total int) map[string]interface{} {
 	return map[string]interface{}{
-		"page":  1,
-		"size":  len(clusters),
-		"total": len(clusters),
-		"items": clusters,
+		keyPage:  page,
+		keySize:  len(items),
+		keyTotal: total,
+		keyItems: items,
 	}
 }
 
-// TestFetchResources_Success tests successful resource fetching
 func TestFetchResources_Success(t *testing.T) {
-	// Create mock server
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Verify request
 		if r.Method != http.MethodGet {
 			t.Errorf("Expected GET request, got %s", r.Method)
 		}
 		if r.URL.Path != testClustersAPIPath {
-			t.Errorf("Expected path /api/hyperfleet/v1/clusters, got %s", r.URL.Path)
+			t.Errorf("Expected path %s, got %s", testClustersAPIPath, r.URL.Path)
 		}
 
-		// Return mock response matching v1.0.0 spec
-		cluster := createMockCluster("cluster-1")
-		cluster["labels"] = map[string]string{"region": "us-east"}
-		response := createMockClusterList([]map[string]interface{}{cluster})
+		cluster := createMockResource("cluster-1", testKindCluster)
+		cluster["labels"] = map[string]string{testLabelRegion: testRegionUSEast}
+		response := createMockResourceList([]map[string]interface{}{cluster}, 1, 1)
 
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(response); err != nil {
@@ -89,10 +147,8 @@ func TestFetchResources_Success(t *testing.T) {
 
 	client := newTestClient(t, server.URL, 10*time.Second)
 
-	// Fetch resources
 	ctx := context.Background()
-	resources, err := client.FetchResources(ctx, ResourceTypeClusters, nil)
-	// Verify
+	resources, err := client.FetchResources(ctx, "clusters", nil)
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
 	}
@@ -113,11 +169,9 @@ func TestFetchResources_Success(t *testing.T) {
 	}
 }
 
-// TestFetchResources_EmptyList tests handling of empty resource list
 func TestFetchResources_EmptyList(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		response := createMockClusterList([]map[string]interface{}{})
-
+		response := createMockResourceList([]map[string]interface{}{}, 1, 0)
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(response); err != nil {
 			t.Errorf("Failed to encode response: %v", err)
@@ -127,7 +181,7 @@ func TestFetchResources_EmptyList(t *testing.T) {
 
 	client := newTestClient(t, server.URL, 10*time.Second)
 
-	resources, err := client.FetchResources(context.Background(), ResourceTypeClusters, nil)
+	resources, err := client.FetchResources(context.Background(), "clusters", nil)
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
 	}
@@ -136,7 +190,6 @@ func TestFetchResources_EmptyList(t *testing.T) {
 	}
 }
 
-// TestFetchResources_404NotFound tests handling of 404 errors (non-retriable)
 func TestFetchResources_404NotFound(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
@@ -148,23 +201,14 @@ func TestFetchResources_404NotFound(t *testing.T) {
 
 	client := newTestClient(t, server.URL, 10*time.Second)
 
-	_, err := client.FetchResources(context.Background(), ResourceTypeClusters, nil)
+	_, err := client.FetchResources(context.Background(), "clusters", nil)
 
 	if err == nil {
 		t.Fatal("Expected error, got nil")
 	}
-
-	// The error is wrapped, so we just verify it contains the right information
-	// APIError is internal to the implementation, the wrapped error should still convey
-	// that it's a 404 and failed
-	errMsg := err.Error()
-	if errMsg == "" {
-		t.Error("Expected non-empty error message")
-	}
 	t.Logf("Got expected 404 error: %v", err)
 }
 
-// TestFetchResources_500ServerError tests handling of 500 errors (retriable)
 func TestFetchResources_500ServerError(t *testing.T) {
 	attemptCount := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -181,27 +225,22 @@ func TestFetchResources_500ServerError(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
-	_, err := client.FetchResources(ctx, ResourceTypeClusters, nil)
+	_, err := client.FetchResources(ctx, "clusters", nil)
 
 	if err == nil {
 		t.Fatal("Expected error, got nil")
 	}
-
-	// Verify retry happened (should have multiple attempts)
 	if attemptCount < 2 {
 		t.Errorf("Expected at least 2 attempts due to retries, got %d", attemptCount)
 	}
-
 	t.Logf("Server received %d requests (initial + retries)", attemptCount)
 }
 
-// TestFetchResources_503ServiceUnavailable_ThenSuccess tests retry on 503 with eventual success
 func TestFetchResources_503ServiceUnavailable_ThenSuccess(t *testing.T) {
 	attemptCount := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		attemptCount++
 		if attemptCount < 2 {
-			// First attempt fails with 503
 			w.WriteHeader(http.StatusServiceUnavailable)
 			if _, err := w.Write([]byte(`{"error": "service unavailable"}`)); err != nil {
 				t.Errorf("Failed to write response: %v", err)
@@ -209,10 +248,9 @@ func TestFetchResources_503ServiceUnavailable_ThenSuccess(t *testing.T) {
 			return
 		}
 
-		// Second attempt succeeds
-		response := createMockClusterList([]map[string]interface{}{
-			createMockCluster("cluster-1"),
-		})
+		response := createMockResourceList([]map[string]interface{}{
+			createMockResource("cluster-1", testKindCluster),
+		}, 1, 1)
 
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(response); err != nil {
@@ -223,7 +261,7 @@ func TestFetchResources_503ServiceUnavailable_ThenSuccess(t *testing.T) {
 
 	client := newTestClient(t, server.URL, 10*time.Second)
 
-	resources, err := client.FetchResources(context.Background(), ResourceTypeClusters, nil)
+	resources, err := client.FetchResources(context.Background(), "clusters", nil)
 	if err != nil {
 		t.Fatalf("Expected no error after retry, got %v", err)
 	}
@@ -233,11 +271,9 @@ func TestFetchResources_503ServiceUnavailable_ThenSuccess(t *testing.T) {
 	if attemptCount < 2 {
 		t.Errorf("Expected at least 2 attempts, got %d", attemptCount)
 	}
-
 	t.Logf("Successfully recovered after %d attempts", attemptCount)
 }
 
-// TestFetchResources_429RateLimited tests handling of 429 errors (retriable)
 func TestFetchResources_429RateLimited(t *testing.T) {
 	attemptCount := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -250,8 +286,7 @@ func TestFetchResources_429RateLimited(t *testing.T) {
 			return
 		}
 
-		// Success after retry
-		response := createMockClusterList([]map[string]interface{}{})
+		response := createMockResourceList([]map[string]interface{}{}, 1, 0)
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(response); err != nil {
 			t.Errorf("Failed to encode response: %v", err)
@@ -261,7 +296,7 @@ func TestFetchResources_429RateLimited(t *testing.T) {
 
 	client := newTestClient(t, server.URL, 10*time.Second)
 
-	_, err := client.FetchResources(context.Background(), ResourceTypeClusters, nil)
+	_, err := client.FetchResources(context.Background(), "clusters", nil)
 	if err != nil {
 		t.Fatalf("Expected no error after retry, got %v", err)
 	}
@@ -270,34 +305,28 @@ func TestFetchResources_429RateLimited(t *testing.T) {
 	}
 }
 
-// TestFetchResources_Timeout tests handling of request timeouts
 func TestFetchResources_Timeout(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Sleep longer than client timeout
 		time.Sleep(2 * time.Second)
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
 
-	// Create client with very short timeout
 	client := newTestClient(t, server.URL, 100*time.Millisecond)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Second)
 	defer cancel()
 
-	_, err := client.FetchResources(ctx, ResourceTypeClusters, nil)
+	_, err := client.FetchResources(ctx, "clusters", nil)
 
 	if err == nil {
 		t.Fatal("Expected timeout error, got nil")
 	}
-
 	t.Logf("Got expected timeout error: %v", err)
 }
 
-// TestFetchResources_ContextCancellation tests handling of context cancellation
 func TestFetchResources_ContextCancellation(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Slow response
 		time.Sleep(500 * time.Millisecond)
 		w.WriteHeader(http.StatusOK)
 	}))
@@ -307,22 +336,19 @@ func TestFetchResources_ContextCancellation(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 
-	// Cancel context after 100ms
 	go func() {
 		time.Sleep(100 * time.Millisecond)
 		cancel()
 	}()
 
-	_, err := client.FetchResources(ctx, ResourceTypeClusters, nil)
+	_, err := client.FetchResources(ctx, "clusters", nil)
 
 	if err == nil {
 		t.Fatal("Expected context cancellation error, got nil")
 	}
-
 	t.Logf("Got expected context cancellation error: %v", err)
 }
 
-// TestFetchResources_MalformedJSON tests handling of malformed JSON responses
 func TestFetchResources_MalformedJSON(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -334,23 +360,20 @@ func TestFetchResources_MalformedJSON(t *testing.T) {
 
 	client := newTestClient(t, server.URL, 10*time.Second)
 
-	_, err := client.FetchResources(context.Background(), ResourceTypeClusters, nil)
+	_, err := client.FetchResources(context.Background(), "clusters", nil)
 
 	if err == nil {
 		t.Fatal("Expected error for malformed JSON, got nil")
 	}
-
 	t.Logf("Got expected error for malformed JSON: %v", err)
 }
 
-// TestFetchResources_NilContext tests handling of nil context
 func TestFetchResources_NilContext(t *testing.T) {
 	client := newTestClient(t, "http://localhost", 10*time.Second)
 
-	// Intentionally pass nil context to test validation
 	// nolint:staticcheck // Testing nil context validation
 	var nilCtx context.Context
-	_, err := client.FetchResources(nilCtx, ResourceTypeClusters, nil)
+	_, err := client.FetchResources(nilCtx, "clusters", nil)
 
 	if err == nil {
 		t.Fatal("Expected error for nil context, got nil")
@@ -360,52 +383,58 @@ func TestFetchResources_NilContext(t *testing.T) {
 	}
 }
 
-// TestFetchResources_InvalidResourceType tests handling of invalid resource type
+func TestFetchResources_EmptyResourceType(t *testing.T) {
+	client := newTestClient(t, "http://localhost", 10*time.Second)
+
+	_, err := client.FetchResources(context.Background(), "", nil)
+
+	if err == nil {
+		t.Fatal("Expected error for empty resourceType, got nil")
+	}
+	if !strings.Contains(err.Error(), "resourceType cannot be empty") {
+		t.Fatalf("Expected 'resourceType cannot be empty' error, got: %v", err)
+	}
+}
+
 func TestFetchResources_InvalidResourceType(t *testing.T) {
 	client := newTestClient(t, "http://localhost", 10*time.Second)
-	testCases := []struct {
+
+	tests := []struct {
 		name         string
-		resourceType ResourceType
+		resourceType string
 	}{
-		{"empty string", ResourceType("")},
-		{"invalid type", ResourceType("invalid")},
-		{"typo - singular", ResourceType("cluster")},
-		{"typo - wrong case", ResourceType("Clusters")},
+		{"contains slash", "clusters/foo"},
+		{"contains query", "clusters?x=1"},
+		{"contains hash", "clusters#frag"},
+		{"contains percent", "clusters%2Ffoo"},
+		{"contains backslash", "clusters\\foo"},
+		{"dot segment", "."},
+		{"dot-dot segment", ".."},
+		{"internal whitespace", "my resources"},
+		{"internal tab", "my\tresources"},
+		{"leading whitespace", " clusters"},
+		{"trailing whitespace", "clusters "},
 	}
 
-	for _, tc := range testCases {
-		t.Run(tc.name, func(t *testing.T) {
-			_, err := client.FetchResources(context.Background(), tc.resourceType, nil)
-
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := client.FetchResources(context.Background(), tt.resourceType, nil)
 			if err == nil {
-				t.Fatalf("Expected error for resourceType %q, got nil", tc.resourceType)
-			}
-			if !strings.Contains(err.Error(), "invalid resourceType") {
-				t.Errorf("Expected 'invalid resourceType' error, got: %v", err)
+				t.Fatalf("Expected error for resourceType %q, got nil", tt.resourceType)
 			}
 		})
 	}
 }
 
-// TestFetchResources_NilStatus tests graceful handling of resources with nil status.
-//
-// Purpose: When the API returns resources without status (e.g., during provisioning
-// or deletion), the client should:
-// 1. Log a warning for observability
-// 2. Skip the resource (graceful degradation)
-// 3. Continue processing remaining resources
-// 4. NOT fail the entire fetch operation
-//
-// This ensures service availability even when some resources are in transitional states.
-func TestFetchResources_NilStatus(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Note: With v1.0.0 spec, status is required, so this test will fail validation
-		// This test might need to be removed or modified since status is now required
-		cluster2 := createMockCluster("cluster-2")
-		response := createMockClusterList([]map[string]interface{}{
-			cluster2,
-		})
+func TestFetchResources_CustomResourceType(t *testing.T) {
+	var receivedPath string
 
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedPath = r.URL.Path
+
+		response := createMockResourceList([]map[string]interface{}{
+			createMockResource("wc-1", "WifConfig"),
+		}, 1, 1)
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(response); err != nil {
 			t.Errorf("Failed to encode response: %v", err)
@@ -415,32 +444,166 @@ func TestFetchResources_NilStatus(t *testing.T) {
 
 	client := newTestClient(t, server.URL, 10*time.Second)
 
-	// Note: A warning will be logged for cluster-1, but we can't easily
-	// verify log output in tests. In production, logs are captured for monitoring.
-	resources, err := client.FetchResources(context.Background(), ResourceTypeClusters, nil)
-	// Verify graceful degradation behavior:
+	resources, err := client.FetchResources(context.Background(), "wifconfigs", nil)
 	if err != nil {
-		t.Fatalf("Expected no error (graceful degradation), got %v", err)
+		t.Fatalf("Expected no error for custom resource type, got %v", err)
 	}
-
-	// Should skip cluster-1 with nil status, return only cluster-2
 	if len(resources) != 1 {
-		t.Fatalf("Expected 1 resource (nil status skipped), got %d", len(resources))
+		t.Fatalf("Expected 1 resource, got %d", len(resources))
 	}
-
-	if resources[0].ID != "cluster-2" {
-		t.Errorf("Expected cluster-2 (valid status), got %s", resources[0].ID)
+	if resources[0].Kind != "WifConfig" {
+		t.Errorf("Expected kind WifConfig, got %s", resources[0].Kind)
 	}
-
-	if len(resources[0].Status.Conditions) == 0 {
-		t.Fatal("Expected at least one condition")
-	}
-	if resources[0].Status.Conditions[0].Status != "True" {
-		t.Errorf("Expected Reconciled condition status 'True', got %s", resources[0].Status.Conditions[0].Status)
+	if receivedPath != "/api/hyperfleet/v1/wifconfigs" {
+		t.Errorf("Expected path /api/hyperfleet/v1/wifconfigs, got %s", receivedPath)
 	}
 }
 
-// TestIsHTTPStatusRetriable tests the retry logic for different HTTP status codes
+func TestFetchResources_WithReferences(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		resource := createMockResource("cluster-1", testKindCluster)
+		resource["references"] = map[string]interface{}{
+			"wif_config": []interface{}{
+				map[string]interface{}{
+					"id":    "wc-xyz",
+					keyKind: "WifConfig",
+					keyHref: "/api/hyperfleet/v1/resources/wc-xyz",
+				},
+			},
+			"network": []interface{}{
+				map[string]interface{}{
+					"id":    "net-1",
+					keyKind: "Network",
+					keyHref: "/api/hyperfleet/v1/resources/net-1",
+				},
+				map[string]interface{}{
+					"id":    "net-2",
+					keyKind: "Network",
+					keyHref: "/api/hyperfleet/v1/resources/net-2",
+				},
+			},
+		}
+		response := createMockResourceList([]map[string]interface{}{resource}, 1, 1)
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(response); err != nil {
+			t.Errorf("Failed to encode response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server.URL, 10*time.Second)
+
+	resources, err := client.FetchResources(context.Background(), "clusters", nil)
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+	if len(resources) != 1 {
+		t.Fatalf("Expected 1 resource, got %d", len(resources))
+	}
+
+	refs := resources[0].References
+	if refs == nil {
+		t.Fatal("Expected References to be set, got nil")
+	}
+	if len(refs["wif_config"]) != 1 {
+		t.Fatalf("Expected 1 wif_config reference, got %d", len(refs["wif_config"]))
+	}
+	if refs["wif_config"][0].ID != "wc-xyz" {
+		t.Errorf("Expected wif_config ref ID wc-xyz, got %s", refs["wif_config"][0].ID)
+	}
+	if len(refs["network"]) != 2 {
+		t.Fatalf("Expected 2 network references, got %d", len(refs["network"]))
+	}
+}
+
+func TestFetchResources_WithOwnerReferences(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		np := createMockResourceWithOwner("np-1", "workers", testKindNodePool, 3, "cluster-123", testKindCluster)
+		response := createMockResourceList([]map[string]interface{}{np}, 1, 1)
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(response); err != nil {
+			t.Errorf("Failed to encode response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server.URL, 10*time.Second)
+
+	resources, err := client.FetchResources(context.Background(), "nodepools", nil)
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+	if len(resources) != 1 {
+		t.Fatalf("Expected 1 resource, got %d", len(resources))
+	}
+	if resources[0].OwnerReferences == nil {
+		t.Fatal("Expected OwnerReferences to be set, got nil")
+	}
+	if resources[0].OwnerReferences.ID != "cluster-123" {
+		t.Errorf("Expected OwnerReferences.ID cluster-123, got %s", resources[0].OwnerReferences.ID)
+	}
+	if resources[0].OwnerReferences.Kind != testKindCluster {
+		t.Errorf("Expected OwnerReferences.Kind Cluster, got %s", resources[0].OwnerReferences.Kind)
+	}
+	if resources[0].Name != "workers" {
+		t.Errorf("Expected Name workers, got %s", resources[0].Name)
+	}
+}
+
+func TestFetchResources_NilStatus(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cluster := createMockResource("cluster-2", testKindCluster)
+		delete(cluster, keyStatus)
+		response := createMockResourceList([]map[string]interface{}{cluster}, 1, 1)
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(response); err != nil {
+			t.Errorf("Failed to encode response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server.URL, 10*time.Second)
+
+	resources, err := client.FetchResources(context.Background(), "clusters", nil)
+	if err != nil {
+		t.Fatalf("Expected no error (graceful degradation), got %v", err)
+	}
+	if len(resources) != 1 {
+		t.Fatalf("Expected 1 resource, got %d", len(resources))
+	}
+	if resources[0].ID != "cluster-2" {
+		t.Errorf("Expected cluster-2, got %s", resources[0].ID)
+	}
+}
+
+func TestFetchResources_MissingTokenFile(t *testing.T) {
+	requestReceived := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestReceived = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	client, err := NewHyperFleetClient(
+		server.URL, 10*time.Second, "test-sentinel", "test", DefaultPageSize, "/nonexistent/token", 0,
+	)
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+
+	_, err = client.FetchResources(context.Background(), "clusters", nil)
+	if err == nil {
+		t.Fatal("Expected error for missing token file, got nil")
+	}
+	var apiErr *APIError
+	if errors.As(err, &apiErr) && apiErr.Retriable {
+		t.Errorf("Expected non-retriable error, got retriable: %v", err)
+	}
+	if requestReceived {
+		t.Error("Expected no request to reach the server, but one was sent")
+	}
+}
+
 func TestIsHTTPStatusRetriable(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -472,63 +635,47 @@ func TestIsHTTPStatusRetriable(t *testing.T) {
 	}
 }
 
-// TestLabelSelectorToSearchString tests label selector to search string conversion
 func TestLabelSelectorToSearchString(t *testing.T) {
 	tests := []struct {
 		name     string
 		selector map[string]string
 		want     string
 	}{
-		{
-			name:     "empty selector",
-			selector: map[string]string{},
-			want:     "",
-		},
-		{
-			name:     "nil selector",
-			selector: nil,
-			want:     "",
-		},
+		{name: "empty selector", selector: map[string]string{}, want: ""},
+		{name: "nil selector", selector: nil, want: ""},
 		{
 			name:     "single label",
-			selector: map[string]string{"region": "us-east"},
+			selector: map[string]string{testLabelRegion: testRegionUSEast},
 			want:     "labels.region='us-east'",
 		},
 		{
-			name: "multiple labels (sorted)",
-			selector: map[string]string{
-				"region": "us-east",
-				"env":    "production",
-			},
-			want: "labels.env='production' and labels.region='us-east'",
+			name:     "multiple labels (sorted)",
+			selector: map[string]string{testLabelRegion: testRegionUSEast, testLabelEnv: "production"},
+			want:     "labels.env='production' and labels.region='us-east'",
 		},
 		{
-			name: "three labels (sorted)",
-			selector: map[string]string{
-				"tier":   "frontend",
-				"region": "us-west",
-				"env":    "staging",
-			},
-			want: "labels.env='staging' and labels.region='us-west' and labels.tier='frontend'",
+			name:     "three labels (sorted)",
+			selector: map[string]string{"tier": "frontend", testLabelRegion: "us-west", testLabelEnv: "staging"},
+			want:     "labels.env='staging' and labels.region='us-west' and labels.tier='frontend'",
 		},
 		{
 			name:     "label with hyphen in key",
-			selector: map[string]string{"my-label": "value"},
+			selector: map[string]string{"my-label": testLabelValue},
 			want:     "labels.my-label='value'",
 		},
 		{
 			name:     "label with underscore in key",
-			selector: map[string]string{"my_label": "value"},
+			selector: map[string]string{"my_label": testLabelValue},
 			want:     "labels.my_label='value'",
 		},
 		{
 			name:     "label with hyphen in value",
-			selector: map[string]string{"region": "us-east-1"},
+			selector: map[string]string{testLabelRegion: "us-east-1"},
 			want:     "labels.region='us-east-1'",
 		},
 		{
 			name:     "label value with single quote (escaped)",
-			selector: map[string]string{"name": "test'value"},
+			selector: map[string]string{keyName: "test'value"},
 			want:     "labels.name='test''value'",
 		},
 	}
@@ -543,7 +690,6 @@ func TestLabelSelectorToSearchString(t *testing.T) {
 	}
 }
 
-// TestFetchResources_NodePools tests fetching nodepools
 func TestFetchResources_NodePools(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet {
@@ -553,50 +699,8 @@ func TestFetchResources_NodePools(t *testing.T) {
 			t.Errorf("Expected path /api/hyperfleet/v1/nodepools, got %s", r.URL.Path)
 		}
 
-		response := map[string]interface{}{
-			"page":  1,
-			"size":  1,
-			"total": 1,
-			"items": []map[string]interface{}{
-				{
-					"id":           "nodepool-1",
-					"href":         "/api/hyperfleet/v1/nodepools/nodepool-1",
-					"kind":         "NodePool",
-					"name":         "workers",
-					"generation":   3,
-					"created_time": "2025-01-01T09:00:00Z",
-					"updated_time": "2025-01-01T10:00:00Z",
-					"created_by":   "test-user@example.com",
-					"updated_by":   "test-user@example.com",
-					"owner_references": map[string]interface{}{
-						"id":   "cluster-123",
-						"kind": "Cluster",
-						"href": "/api/hyperfleet/v1/clusters/cluster-123",
-					},
-					"spec": map[string]interface{}{},
-					"status": map[string]interface{}{
-						"conditions": []map[string]interface{}{
-							{
-								"type":                 "Reconciled",
-								"status":               "True",
-								"created_time":         "2025-01-01T09:00:00Z",
-								"last_transition_time": "2025-01-01T10:00:00Z",
-								"last_updated_time":    "2025-01-01T12:00:00Z",
-								"observed_generation":  3,
-							},
-							{
-								"type":                 "LastKnownReconciled",
-								"status":               "True",
-								"created_time":         "2025-01-01T09:00:00Z",
-								"last_transition_time": "2025-01-01T10:00:00Z",
-								"last_updated_time":    "2025-01-01T12:00:00Z",
-								"observed_generation":  3,
-							},
-						},
-					},
-				},
-			},
-		}
+		np := createMockResourceWithOwner("nodepool-1", "workers", testKindNodePool, 3, "cluster-123", testKindCluster)
+		response := createMockResourceList([]map[string]interface{}{np}, 1, 1)
 
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(response); err != nil {
@@ -606,7 +710,7 @@ func TestFetchResources_NodePools(t *testing.T) {
 	defer server.Close()
 
 	client := newTestClient(t, server.URL, 10*time.Second)
-	resources, err := client.FetchResources(context.Background(), ResourceTypeNodePools, nil)
+	resources, err := client.FetchResources(context.Background(), "nodepools", nil)
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
 	}
@@ -616,7 +720,7 @@ func TestFetchResources_NodePools(t *testing.T) {
 	if resources[0].ID != "nodepool-1" {
 		t.Errorf("Expected ID nodepool-1, got %s", resources[0].ID)
 	}
-	if resources[0].Kind != "NodePool" {
+	if resources[0].Kind != testKindNodePool {
 		t.Errorf("Expected kind NodePool, got %s", resources[0].Kind)
 	}
 	if resources[0].Generation != 3 {
@@ -634,19 +738,17 @@ func TestFetchResources_NodePools(t *testing.T) {
 	if resources[0].OwnerReferences.ID != "cluster-123" {
 		t.Errorf("Expected OwnerReferences.ID cluster-123, got %s", resources[0].OwnerReferences.ID)
 	}
-	if resources[0].OwnerReferences.Kind != "Cluster" {
+	if resources[0].OwnerReferences.Kind != testKindCluster {
 		t.Errorf("Expected OwnerReferences.Kind Cluster, got %s", resources[0].OwnerReferences.Kind)
 	}
 }
 
-// TestNewHyperFleetClient_UserAgent verifies that every request carries the expected
-// User-Agent header built from the sentinel name and version.
 func TestNewHyperFleetClient_UserAgent(t *testing.T) {
 	var receivedUA string
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		receivedUA = r.Header.Get("User-Agent")
-		response := createMockClusterList([]map[string]interface{}{})
+		response := createMockResourceList([]map[string]interface{}{}, 1, 0)
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(response); err != nil {
 			t.Errorf("Failed to encode response: %v", err)
@@ -654,12 +756,12 @@ func TestNewHyperFleetClient_UserAgent(t *testing.T) {
 	}))
 	defer server.Close()
 
-	c, err := NewHyperFleetClient(server.URL, 10*time.Second, "my-sentinel", "v1.2.3")
+	c, err := NewHyperFleetClient(server.URL, 10*time.Second, "my-sentinel", "v1.2.3", DefaultPageSize, "", 0)
 	if err != nil {
 		t.Fatalf("NewHyperFleetClient: %v", err)
 	}
 
-	if _, err := c.FetchResources(context.Background(), ResourceTypeClusters, nil); err != nil {
+	if _, err := c.FetchResources(context.Background(), "clusters", nil); err != nil {
 		t.Fatalf("FetchResources: %v", err)
 	}
 
@@ -669,15 +771,14 @@ func TestNewHyperFleetClient_UserAgent(t *testing.T) {
 	}
 }
 
-// TestFetchResources_WithLabelSelector tests search parameter functionality
 func TestFetchResources_WithLabelSelector(t *testing.T) {
 	var receivedSearchParam string
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		receivedSearchParam = r.URL.Query().Get("search")
 
-		cluster := createMockCluster("cluster-1")
-		response := createMockClusterList([]map[string]interface{}{cluster})
+		cluster := createMockResource("cluster-1", testKindCluster)
+		response := createMockResourceList([]map[string]interface{}{cluster}, 1, 1)
 
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(response); err != nil {
@@ -689,11 +790,11 @@ func TestFetchResources_WithLabelSelector(t *testing.T) {
 	client := newTestClient(t, server.URL, 10*time.Second)
 
 	labelSelector := map[string]string{
-		"region": "us-east",
-		"env":    "production",
+		testLabelRegion: testRegionUSEast,
+		testLabelEnv:    "production",
 	}
 
-	resources, err := client.FetchResources(context.Background(), ResourceTypeClusters, labelSelector)
+	resources, err := client.FetchResources(context.Background(), "clusters", labelSelector)
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
 	}
@@ -707,21 +808,18 @@ func TestFetchResources_WithLabelSelector(t *testing.T) {
 	}
 }
 
-// TestVerifyConnectivity_Success tests successful health check
 func TestVerifyConnectivity_Success(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Verify correct endpoint called
 		if r.URL.Path != testClustersAPIPath {
-			t.Errorf("Expected path /api/hyperfleet/v1/clusters, got %s", r.URL.Path)
+			t.Errorf("Expected path %s, got %s", testClustersAPIPath, r.URL.Path)
 		}
 		if r.Method != http.MethodGet {
 			t.Errorf("Expected GET request, got %s", r.Method)
 		}
 
-		// Return successful health check response
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		response := map[string]string{"status": "ok"}
+		response := map[string]string{keyStatus: "ok"}
 		if err := json.NewEncoder(w).Encode(response); err != nil {
 			t.Errorf("Failed to encode response: %v", err)
 		}
@@ -731,13 +829,12 @@ func TestVerifyConnectivity_Success(t *testing.T) {
 	client := newTestClient(t, server.URL, 10*time.Second)
 
 	ctx := context.Background()
-	err := client.VerifyConnectivity(ctx)
+	err := client.VerifyConnectivity(ctx, "clusters")
 	if err != nil {
 		t.Errorf("Expected successful health check, got error: %v", err)
 	}
 }
 
-// TestVerifyConnectivity_NonOKStatus tests handling of non-200 status codes
 func TestVerifyConnectivity_NonOKStatus(t *testing.T) {
 	ctx := context.Background()
 	testCases := []struct {
@@ -745,21 +842,13 @@ func TestVerifyConnectivity_NonOKStatus(t *testing.T) {
 		response   string
 		statusCode int
 	}{
-		{
-			name:       "ServiceUnavailable",
-			statusCode: http.StatusServiceUnavailable,
-			response:   `{"error": "service unavailable"}`,
-		},
+		{name: "ServiceUnavailable", statusCode: http.StatusServiceUnavailable, response: `{"error": "service unavailable"}`},
 		{
 			name:       "InternalServerError",
 			statusCode: http.StatusInternalServerError,
 			response:   `{"error": "internal server error"}`,
 		},
-		{
-			name:       "NotFound",
-			statusCode: http.StatusNotFound,
-			response:   `{"error": "endpoint not found"}`,
-		},
+		{name: "NotFound", statusCode: http.StatusNotFound, response: `{"error": "endpoint not found"}`},
 	}
 
 	for _, tc := range testCases {
@@ -775,10 +864,10 @@ func TestVerifyConnectivity_NonOKStatus(t *testing.T) {
 
 			client := newTestClient(t, server.URL, 10*time.Second)
 
-			err := client.VerifyConnectivity(ctx)
+			err := client.VerifyConnectivity(ctx, "clusters")
 
 			if err == nil {
-				t.Errorf("Expected error for status %d, got nil", tc.statusCode)
+				t.Fatalf("Expected error for status %d, got nil", tc.statusCode)
 			}
 			if !strings.Contains(err.Error(), strconv.Itoa(tc.statusCode)) {
 				t.Errorf("Expected error to mention status %d, got: %v", tc.statusCode, err)
@@ -787,7 +876,86 @@ func TestVerifyConnectivity_NonOKStatus(t *testing.T) {
 	}
 }
 
-// TestBuildSearchString tests combining label selectors and additional filters
+func TestVerifyConnectivity_MissingTokenFile(t *testing.T) {
+	requestReceived := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestReceived = true
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer server.Close()
+
+	client, err := NewHyperFleetClient(
+		server.URL, 10*time.Second, "test-sentinel", "test", DefaultPageSize, "/nonexistent/token", 0,
+	)
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+
+	err = client.VerifyConnectivity(context.Background(), "clusters")
+	if err == nil {
+		t.Fatal("Expected error for missing token file, got nil")
+	}
+	if !IsTokenError(err) {
+		t.Errorf("Expected IsTokenError to be true, got false for: %v", err)
+	}
+	if requestReceived {
+		t.Error("Expected no request to reach the server, but one was sent")
+	}
+}
+
+func TestVerifyConnectivity_CustomResourceType(t *testing.T) {
+	var receivedPath string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedPath = r.URL.Path
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		if err := json.NewEncoder(w).Encode(map[string]string{keyStatus: "ok"}); err != nil {
+			t.Errorf("Failed to encode response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server.URL, 10*time.Second)
+
+	err := client.VerifyConnectivity(context.Background(), "wifconfigs")
+	if err != nil {
+		t.Errorf("Expected successful connectivity check for wifconfigs, got: %v", err)
+	}
+	if receivedPath != "/api/hyperfleet/v1/wifconfigs" {
+		t.Errorf("Expected path /api/hyperfleet/v1/wifconfigs, got %s", receivedPath)
+	}
+}
+
+func TestVerifyConnectivity_SendsAuthHeader(t *testing.T) {
+	var receivedAuth string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedAuth = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		if err := json.NewEncoder(w).Encode(map[string]string{keyStatus: "ok"}); err != nil {
+			t.Errorf("Failed to encode response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	tokenFile := t.TempDir() + "/token"
+	if err := os.WriteFile(tokenFile, []byte("test-token"), 0600); err != nil {
+		t.Fatalf("Failed to write token file: %v", err)
+	}
+
+	client, err := NewHyperFleetClient(server.URL, 10*time.Second, "test-sentinel", "test", DefaultPageSize, tokenFile, 0)
+	if err != nil {
+		t.Fatalf("Failed to create client: %v", err)
+	}
+
+	if err := client.VerifyConnectivity(context.Background(), "clusters"); err != nil {
+		t.Fatalf("VerifyConnectivity returned unexpected error: %v", err)
+	}
+	if receivedAuth != "Bearer test-token" {
+		t.Errorf("Expected Authorization header %q, got %q", "Bearer test-token", receivedAuth)
+	}
+}
+
 func TestBuildSearchString(t *testing.T) {
 	staleTimeFilter := "status.conditions.Reconciled.last_updated_time<='2025-01-01T00:00:00Z'"
 	tests := []struct {
@@ -796,48 +964,23 @@ func TestBuildSearchString(t *testing.T) {
 		want              string
 		additionalFilters []string
 	}{
+		{name: "labels only", labelSelector: map[string]string{testLabelShard: "1"}, want: "labels.shard='1'"},
+		{name: "filter only", additionalFilters: []string{testReconciledFilter}, want: testReconciledFilter},
 		{
-			name:              "labels only",
-			labelSelector:     map[string]string{"shard": "1"},
-			additionalFilters: nil,
-			want:              "labels.shard='1'",
+			name: "both labels and filter", labelSelector: map[string]string{testLabelShard: "1"},
+			additionalFilters: []string{testReconciledFilter},
+			want:              "labels.shard='1' and " + testReconciledFilter,
 		},
 		{
-			name:              "filter only",
-			labelSelector:     nil,
-			additionalFilters: []string{"status.conditions.Reconciled='False'"},
-			want:              "status.conditions.Reconciled='False'",
+			name: "multiple filters", labelSelector: map[string]string{testLabelShard: "1"},
+			additionalFilters: []string{"status.conditions.Reconciled='True'", staleTimeFilter},
+			want:              "labels.shard='1' and status.conditions.Reconciled='True' and " + staleTimeFilter,
 		},
-		{
-			name:          "both labels and filter",
-			labelSelector: map[string]string{"shard": "1"},
-			additionalFilters: []string{
-				"status.conditions.Reconciled='False'",
-			},
-			want: "labels.shard='1' and status.conditions.Reconciled='False'",
-		},
-		{
-			name:          "multiple filters",
-			labelSelector: map[string]string{"shard": "1"},
-			additionalFilters: []string{
-				"status.conditions.Reconciled='True'",
-				staleTimeFilter,
-			},
-			want: "labels.shard='1' and " +
-				"status.conditions.Reconciled='True' and " +
-				staleTimeFilter,
-		},
-		{
-			name:              "both empty",
-			labelSelector:     nil,
-			additionalFilters: nil,
-			want:              "",
-		},
+		{name: "both empty", want: ""},
 		{
 			name:              "empty string filter ignored",
-			labelSelector:     nil,
-			additionalFilters: []string{"", "status.conditions.Reconciled='False'", ""},
-			want:              "status.conditions.Reconciled='False'",
+			additionalFilters: []string{"", testReconciledFilter, ""},
+			want:              testReconciledFilter,
 		},
 	}
 
@@ -853,7 +996,7 @@ func TestBuildSearchString(t *testing.T) {
 
 func newTestClient(t *testing.T, url string, timeout time.Duration) *HyperFleetClient {
 	t.Helper()
-	client, err := NewHyperFleetClient(url, timeout, "test-sentinel", "test")
+	client, err := NewHyperFleetClient(url, timeout, "test-sentinel", "test", DefaultPageSize, "", 0)
 	if err != nil {
 		t.Fatalf("Failed to create client: %v", err)
 	}
@@ -861,10 +1004,8 @@ func newTestClient(t *testing.T, url string, timeout time.Duration) *HyperFleetC
 }
 
 func TestNewHyperFleetClient_HTTPInstrumentation(t *testing.T) {
-	// Capture the previous global tracer provider
 	previousProvider := otel.GetTracerProvider()
 
-	// Setup in-memory trace exporter
 	exporter := tracetest.NewInMemoryExporter()
 	tp := trace.NewTracerProvider(
 		trace.WithSampler(trace.AlwaysSample()),
@@ -876,7 +1017,6 @@ func TestNewHyperFleetClient_HTTPInstrumentation(t *testing.T) {
 		if err != nil {
 			t.Errorf("Error shutting down tracer: %v", err)
 		}
-		// Restore the previous global tracer provider
 		otel.SetTracerProvider(previousProvider)
 	}(tp, context.Background())
 
@@ -885,11 +1025,11 @@ func TestNewHyperFleetClient_HTTPInstrumentation(t *testing.T) {
 			t.Errorf("Expected GET request, got %s", r.Method)
 		}
 		if r.URL.Path != testClustersAPIPath {
-			t.Errorf("Expected path /api/hyperfleet/v1/clusters, got %s", r.URL.Path)
+			t.Errorf("Expected path %s, got %s", testClustersAPIPath, r.URL.Path)
 		}
 
-		cluster := createMockCluster("test-cluster-1")
-		response := createMockClusterList([]map[string]interface{}{cluster})
+		cluster := createMockResource("test-cluster-1", testKindCluster)
+		response := createMockResourceList([]map[string]interface{}{cluster}, 1, 1)
 
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(response); err != nil {
@@ -898,21 +1038,18 @@ func TestNewHyperFleetClient_HTTPInstrumentation(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := NewHyperFleetClient(server.URL, 10*time.Second, "test-sentinel", "test")
+	client, err := NewHyperFleetClient(server.URL, 10*time.Second, "test-sentinel", "test", DefaultPageSize, "", 0)
 	if err != nil {
 		t.Fatalf("Failed to create client: %v", err)
 	}
 
-	// Verify client was created
 	if client == nil {
 		t.Fatal("Expected client to be created")
 	}
 
-	// Make actual HTTP call to test instrumentation
 	ctx := context.Background()
-	resources, err := client.FetchResources(ctx, ResourceTypeClusters, nil)
+	resources, err := client.FetchResources(ctx, "clusters", nil)
 
-	// Verify functional behavior
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
 	}
@@ -923,19 +1060,16 @@ func TestNewHyperFleetClient_HTTPInstrumentation(t *testing.T) {
 		t.Errorf("Expected ID test-cluster-1, got %s", resources[0].ID)
 	}
 
-	// Force flush to get spans
 	err = tp.ForceFlush(ctx)
 	if err != nil {
 		t.Fatalf("Error force flush: %v", err)
 	}
 
-	// Verify HTTP spans were created by instrumentation
 	spans := exporter.GetSpans()
 	if len(spans) == 0 {
 		t.Fatal("Expected HTTP spans to be created, got none")
 	}
 
-	// Look for HTTP GET span
 	var httpSpan *tracetest.SpanStub
 	for i := range spans {
 		if strings.Contains(spans[i].Name, "GET") {
@@ -952,16 +1086,15 @@ func TestNewHyperFleetClient_HTTPInstrumentation(t *testing.T) {
 		t.Fatalf("Expected HTTP GET span, got spans: %v", spanNames)
 	}
 
-	// Verify HTTP span attributes (following OpenTelemetry HTTP conventions)
 	foundMethodAttr := false
 	foundURLAttr := false
 	for _, attr := range httpSpan.Attributes {
 		switch string(attr.Key) {
-		case "http.request.method", "http.method": // Different versions of OTel use different names
+		case "http.request.method", "http.method":
 			if attr.Value.AsString() == "GET" {
 				foundMethodAttr = true
 			}
-		case "url.full", "http.url": // Different versions of OTel use different names
+		case "url.full", "http.url":
 			if strings.Contains(attr.Value.AsString(), testClustersAPIPath) {
 				foundURLAttr = true
 			}
@@ -975,17 +1108,14 @@ func TestNewHyperFleetClient_HTTPInstrumentation(t *testing.T) {
 		t.Error("Expected URL attribute in span")
 	}
 
-	// Verify span completed successfully (no error status)
 	if httpSpan.Status.Code.String() == "ERROR" {
 		t.Errorf("Expected successful HTTP span, got error status: %s", httpSpan.Status.Description)
 	}
 }
 
 func TestNewHyperFleetClient_HTTPInstrumentation_ErrorCase(t *testing.T) {
-	// Capture the previous global tracer provider
 	previousProvider := otel.GetTracerProvider()
 
-	// Setup tracing
 	exporter := tracetest.NewInMemoryExporter()
 	tp := trace.NewTracerProvider(
 		trace.WithSampler(trace.AlwaysSample()),
@@ -997,11 +1127,9 @@ func TestNewHyperFleetClient_HTTPInstrumentation_ErrorCase(t *testing.T) {
 		if err != nil {
 			t.Errorf("Error shutting down tracer: %v", err)
 		}
-		// Restore the previous global tracer provider
 		otel.SetTracerProvider(previousProvider)
 	}(tp, context.Background())
 
-	// Server returns 500
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		_, err := w.Write([]byte(`{"error": "internal server error"}`))
@@ -1012,20 +1140,18 @@ func TestNewHyperFleetClient_HTTPInstrumentation_ErrorCase(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, err := NewHyperFleetClient(server.URL, 10*time.Second, "test-sentinel", "test")
+	client, err := NewHyperFleetClient(server.URL, 10*time.Second, "test-sentinel", "test", DefaultPageSize, "", 0)
 	if err != nil {
 		t.Fatalf("Failed to create client: %v", err)
 	}
 
 	ctx := context.Background()
-	_, err = client.FetchResources(ctx, ResourceTypeClusters, nil)
+	_, err = client.FetchResources(ctx, "clusters", nil)
 
-	// Verify error behavior (like existing tests)
 	if err == nil {
 		t.Fatal("Expected error, got nil")
 	}
 
-	// Verify spans still created on error
 	err = tp.ForceFlush(ctx)
 	if err != nil {
 		t.Fatalf("Error force flush: %v", err)
@@ -1037,19 +1163,13 @@ func TestNewHyperFleetClient_HTTPInstrumentation_ErrorCase(t *testing.T) {
 	}
 }
 
-// TestFetchResources_WithAdditionalFilters tests FetchResources with combined label selectors and condition filters
 func TestFetchResources_WithAdditionalFilters(t *testing.T) {
 	var receivedSearchParam string
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		receivedSearchParam = r.URL.Query().Get("search")
 
-		response := map[string]interface{}{
-			"page":  1,
-			"size":  0,
-			"total": 0,
-			"items": []map[string]interface{}{},
-		}
+		response := createMockResourceList([]map[string]interface{}{}, 1, 0)
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(response); err != nil {
 			t.Logf("Error encoding response: %v", err)
@@ -1057,36 +1177,30 @@ func TestFetchResources_WithAdditionalFilters(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, _ := NewHyperFleetClient(server.URL, 10*time.Second, "test-sentinel", "test")
-	labelSelector := map[string]string{"shard": "1"}
+	client, _ := NewHyperFleetClient(server.URL, 10*time.Second, "test-sentinel", "test", DefaultPageSize, "", 0)
+	labelSelector := map[string]string{testLabelShard: "1"}
 
 	_, err := client.FetchResources(
-		context.Background(), ResourceTypeClusters, labelSelector,
-		"status.conditions.Reconciled='False'",
+		context.Background(), "clusters", labelSelector,
+		testReconciledFilter,
 	)
 	if err != nil {
 		t.Fatalf("Expected no error, got %v", err)
 	}
 
-	expectedSearch := "labels.shard='1' and status.conditions.Reconciled='False'"
+	expectedSearch := "labels.shard='1' and " + testReconciledFilter
 	if receivedSearchParam != expectedSearch {
 		t.Errorf("Expected search parameter %q, got %q", expectedSearch, receivedSearchParam)
 	}
 }
 
-// TestFetchResources_WithConditionFilterOnly tests FetchResources with only condition filters (no labels)
 func TestFetchResources_WithConditionFilterOnly(t *testing.T) {
 	var receivedSearchParam string
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		receivedSearchParam = r.URL.Query().Get("search")
 
-		response := map[string]interface{}{
-			"page":  1,
-			"size":  0,
-			"total": 0,
-			"items": []map[string]interface{}{},
-		}
+		response := createMockResourceList([]map[string]interface{}{}, 1, 0)
 		w.Header().Set("Content-Type", "application/json")
 		if err := json.NewEncoder(w).Encode(response); err != nil {
 			t.Logf("Error encoding response: %v", err)
@@ -1094,10 +1208,10 @@ func TestFetchResources_WithConditionFilterOnly(t *testing.T) {
 	}))
 	defer server.Close()
 
-	client, _ := NewHyperFleetClient(server.URL, 10*time.Second, "test-sentinel", "test")
+	client, _ := NewHyperFleetClient(server.URL, 10*time.Second, "test-sentinel", "test", DefaultPageSize, "", 0)
 
 	_, err := client.FetchResources(
-		context.Background(), ResourceTypeClusters, nil,
+		context.Background(), "clusters", nil,
 		"status.conditions.Reconciled='True'",
 	)
 	if err != nil {
@@ -1107,5 +1221,158 @@ func TestFetchResources_WithConditionFilterOnly(t *testing.T) {
 	expectedSearch := "status.conditions.Reconciled='True'"
 	if receivedSearchParam != expectedSearch {
 		t.Errorf("Expected search parameter %q, got %q", expectedSearch, receivedSearchParam)
+	}
+}
+
+func TestFetchResources_Pagination(t *testing.T) {
+	var requestedPages []int
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		pageStr := r.URL.Query().Get(keyPage)
+		page, _ := strconv.Atoi(pageStr)
+		requestedPages = append(requestedPages, page)
+
+		totalResources := 54
+		pageSize := 20
+		start := (page - 1) * pageSize
+		end := start + pageSize
+		if end > totalResources {
+			end = totalResources
+		}
+
+		items := make([]map[string]interface{}, 0, end-start)
+		for i := start; i < end; i++ {
+			items = append(items, createMockResource(fmt.Sprintf("cluster-%d", i+1), testKindCluster))
+		}
+
+		response := createMockResourceList(items, page, totalResources)
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(response); err != nil {
+			t.Errorf("Failed to encode response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server.URL, 10*time.Second)
+	resources, err := client.FetchResources(context.Background(), "clusters", nil)
+
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+	if len(resources) != 54 {
+		t.Fatalf("Expected 54 resources, got %d", len(resources))
+	}
+	if len(requestedPages) != 3 {
+		t.Fatalf("Expected 3 page requests, got %d: %v", len(requestedPages), requestedPages)
+	}
+	if resources[0].ID != "cluster-1" {
+		t.Errorf("Expected first resource ID cluster-1, got %s", resources[0].ID)
+	}
+	if resources[53].ID != "cluster-54" {
+		t.Errorf("Expected last resource ID cluster-54, got %s", resources[53].ID)
+	}
+}
+
+func TestFetchResources_PaginationSinglePage(t *testing.T) {
+	requestCount := 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		items := []map[string]interface{}{
+			createMockResource("cluster-1", testKindCluster),
+			createMockResource("cluster-2", testKindCluster),
+		}
+		response := createMockResourceList(items, 1, 2)
+		w.Header().Set("Content-Type", "application/json")
+		if err := json.NewEncoder(w).Encode(response); err != nil {
+			t.Errorf("Failed to encode response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server.URL, 10*time.Second)
+	resources, err := client.FetchResources(context.Background(), "clusters", nil)
+
+	if err != nil {
+		t.Fatalf("Expected no error, got %v", err)
+	}
+	if len(resources) != 2 {
+		t.Fatalf("Expected 2 resources, got %d", len(resources))
+	}
+	if requestCount != 1 {
+		t.Errorf("Expected 1 request for single page, got %d", requestCount)
+	}
+}
+
+func TestFetchResources_PaginationErrorOnSecondPage(t *testing.T) {
+	requestCount := 0
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		if requestCount == 1 {
+			items := make([]map[string]interface{}, 20)
+			for i := range items {
+				items[i] = createMockResource(fmt.Sprintf("cluster-%d", i+1), testKindCluster)
+			}
+			response := createMockResourceList(items, 1, 40)
+			w.Header().Set("Content-Type", "application/json")
+			if err := json.NewEncoder(w).Encode(response); err != nil {
+				t.Errorf("Failed to encode response: %v", err)
+			}
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+		if _, err := w.Write([]byte(`{"error": "not found"}`)); err != nil {
+			t.Errorf("Failed to write response: %v", err)
+		}
+	}))
+	defer server.Close()
+
+	client := newTestClient(t, server.URL, 10*time.Second)
+	resources, err := client.FetchResources(context.Background(), "clusters", nil)
+
+	if err == nil {
+		t.Fatal("Expected error on second page, got nil")
+	}
+	if len(resources) != 0 {
+		t.Fatalf("Expected no resources on paginated failure, got %d", len(resources))
+	}
+}
+
+func TestFetchResources_PaginationSendsSize(t *testing.T) {
+	tests := []struct {
+		name         string
+		resourceType string
+		expectedPath string
+	}{
+		{name: "clusters", resourceType: "clusters", expectedPath: testClustersAPIPath},
+		{name: "nodepools", resourceType: "nodepools", expectedPath: "/api/hyperfleet/v1/nodepools"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var receivedSize string
+
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				receivedSize = r.URL.Query().Get(keySize)
+				response := createMockResourceList([]map[string]interface{}{}, 1, 0)
+				w.Header().Set("Content-Type", "application/json")
+				if err := json.NewEncoder(w).Encode(response); err != nil {
+					t.Errorf("Failed to encode response: %v", err)
+				}
+			}))
+			defer server.Close()
+
+			client := newTestClient(t, server.URL, 10*time.Second)
+			_, err := client.FetchResources(context.Background(), tt.resourceType, nil)
+			if err != nil {
+				t.Fatalf("Expected no error, got %v", err)
+			}
+
+			expected := strconv.Itoa(int(DefaultPageSize))
+			if receivedSize != expected {
+				t.Errorf("Expected size=%s, got %q", expected, receivedSize)
+			}
+		})
 	}
 }

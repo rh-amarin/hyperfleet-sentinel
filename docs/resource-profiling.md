@@ -1,12 +1,8 @@
 # Sentinel Profiling Results
 
-**Status**: Active
-**Owner**: HyperFleet Team
-**Last Updated**: 2026-03-26
+> **Audience:** Platform operators and SREs sizing Sentinel deployments.
 
 [HYPERFLEET-556](https://issues.redhat.com/browse/HYPERFLEET-556) — Validate resource limits and requests against actual Sentinel consumption.
-
-**Audience:** Platform operators and SREs sizing Sentinel deployments.
 
 ## Goal
 

@@ -8,9 +8,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- CEL decision and payload contexts now expose `name`, `spec`, and `references` fields from generic resources
 
 ### Changed
 - OpenAPI schema is now sourced from the versioned `hyperfleet-api-spec` Go module instead of being downloaded from `hyperfleet-api` main branch
+- Documented single-instance deployment limitation — running multiple replicas with overlapping resource selectors causes duplicate events. Added recommended deployment configuration and scaling guidance
+- `resource_type` config accepts any registered entity type plural (e.g. `wifconfigs`), no longer limited to `clusters` and `nodepools`
+- API client replaced typed per-entity endpoints with generic `GET /api/hyperfleet/v1/{plural}` resource list endpoint (`hyperfleet-api-spec` v1.0.25)
 
 ### Deprecated
 
@@ -18,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - BREAKING CHANGE: `messaging_system` config field and `MESSAGING_SYSTEM` env var removed, `messaging.system` OTel span attribute is now derived from `publisher.BrokerType()`. Remove `messaging_system` from configs before upgrading.
 
 ### Fixed
+- Sentinel now paginates API responses, fetching all resources instead of only the first page (default size 20). Environments with more than 20 clusters/nodepools were missing reconciliation events.
 
 ### Security
 

@@ -183,8 +183,36 @@ func TestDecisionEngine_Evaluate(t *testing.T) {
 			wantReason:        "message decision result is false",
 		},
 		{
-			name:              "new resource (generation 1, not reconciled) - should publish",
+			name:              "gen 1 with condition (adapter seen) - debounce applies, too recent",
 			resource:          newResourceWithCondition("False", now, 1),
+			now:               now,
+			wantShouldPublish: false,
+			wantReason:        "message decision result is false",
+		},
+		{
+			name:              "gen 1 no conditions (truly new) - should publish immediately",
+			resource:          newResourceNoConditions(1),
+			now:               now,
+			wantShouldPublish: true,
+			wantReason:        "message decision matched",
+		},
+		{
+			name:              "gen 1 with condition debounce exceeded - should publish via not_reconciled_and_debounced",
+			resource:          newResourceWithCondition("False", now.Add(-11*time.Second), 1),
+			now:               now,
+			wantShouldPublish: true,
+			wantReason:        "message decision matched",
+		},
+		{
+			name:              "gen 1 reconciled recent - should not publish",
+			resource:          newResourceWithCondition("True", now.Add(-5*time.Minute), 1),
+			now:               now,
+			wantShouldPublish: false,
+			wantReason:        "message decision result is false",
+		},
+		{
+			name:              "gen 1 reconciled stale - should publish via reconciled_and_stale",
+			resource:          newResourceWithCondition("True", now.Add(-31*time.Minute), 1),
 			now:               now,
 			wantShouldPublish: true,
 			wantReason:        "message decision matched",
@@ -549,18 +577,25 @@ func TestResourceToMap(t *testing.T) {
 		ID:          "res-1",
 		Href:        "/api/v1/clusters/res-1",
 		Kind:        "Cluster",
+		Name:        "my-cluster",
 		Generation:  3,
 		CreatedTime: now,
 		UpdatedTime: now,
 		Labels:      map[string]string{"env": "prod"},
-		OwnerReferences: &client.OwnerReference{
+		Spec:        map[string]interface{}{"cloud_provider": "gcp"},
+		OwnerReferences: &client.ObjectReference{
 			ID:   "owner-1",
 			Href: "/api/v1/owners/owner-1",
 			Kind: "Owner",
 		},
+		References: map[string][]client.ObjectReference{
+			"wif_config": {
+				{ID: "wc-1", Kind: "WifConfig", Href: "/api/v1/resources/wc-1"},
+			},
+		},
 	}
 
-	m := resourceToMap(resource)
+	m := resource.ToMap()
 
 	if m["id"] != "res-1" {
 		t.Errorf("id = %v, want res-1", m["id"])
@@ -568,8 +603,19 @@ func TestResourceToMap(t *testing.T) {
 	if m["kind"] != "Cluster" {
 		t.Errorf("kind = %v, want Cluster", m["kind"])
 	}
+	if m["name"] != "my-cluster" {
+		t.Errorf("name = %v, want my-cluster", m["name"])
+	}
 	if m["generation"] != int64(3) {
 		t.Errorf("generation = %v, want 3", m["generation"])
+	}
+
+	spec, ok := m["spec"].(map[string]interface{})
+	if !ok {
+		t.Fatal("spec not found or wrong type")
+	}
+	if spec["cloud_provider"] != "gcp" {
+		t.Errorf("spec.cloud_provider = %v, want gcp", spec["cloud_provider"])
 	}
 
 	labels, ok := m["labels"].(map[string]interface{})
@@ -587,6 +633,22 @@ func TestResourceToMap(t *testing.T) {
 	if owner["id"] != "owner-1" {
 		t.Errorf("owner_references.id = %v, want owner-1", owner["id"])
 	}
+
+	refs, ok := m["references"].(map[string]interface{})
+	if !ok {
+		t.Fatal("references not found or wrong type")
+	}
+	wifRefs, ok := refs["wif_config"].([]interface{})
+	if !ok || len(wifRefs) != 1 {
+		t.Fatalf("references.wif_config expected 1 item, got %v", refs["wif_config"])
+	}
+	wifRef, ok := wifRefs[0].(map[string]interface{})
+	if !ok {
+		t.Fatal("references.wif_config[0] wrong type")
+	}
+	if wifRef["id"] != "wc-1" {
+		t.Errorf("references.wif_config[0].id = %v, want wc-1", wifRef["id"])
+	}
 }
 
 func TestResourceToMap_NoOptionalFields(t *testing.T) {
@@ -596,7 +658,7 @@ func TestResourceToMap_NoOptionalFields(t *testing.T) {
 		Generation: 1,
 	}
 
-	m := resourceToMap(resource)
+	m := resource.ToMap()
 
 	if _, ok := m["labels"]; ok {
 		t.Error("labels should not be present when empty")

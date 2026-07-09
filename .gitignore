@@ -45,8 +45,9 @@ dist/
 build/
 secrets/
 
-# Generated code
-pkg/api/openapi/
+# Generated code (but keep stub for go module resolution)
+pkg/api/openapi/*
+!/pkg/api/openapi/stub.go
 
 # Downloaded OpenAPI spec (fetched during make generate)
 openapi/openapi.yaml

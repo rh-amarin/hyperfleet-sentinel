@@ -296,7 +296,7 @@ func TestValidate_InvalidResourceType(t *testing.T) {
 	}
 }
 
-func TestValidate_InvalidResourceTypes(t *testing.T) {
+func TestValidate_ResourceTypes(t *testing.T) {
 	tests := []struct {
 		name         string
 		resourceType string
@@ -304,10 +304,8 @@ func TestValidate_InvalidResourceTypes(t *testing.T) {
 	}{
 		{"valid clusters", testResourceType, false},
 		{"valid nodepools", "nodepools", false},
-		{"invalid manifests", "manifests", true},
-		{"invalid workloads", "workloads", true},
-		{"invalid pods", "pods", true},
-		{"invalid deployments", "deployments", true},
+		{"valid wifconfigs", "wifconfigs", false},
+		{"valid custom type", "myresources", false},
 		{"empty", "", true},
 	}
 
@@ -361,6 +359,37 @@ func TestValidate_NegativeDurations(t *testing.T) {
 			err := cfg.Validate()
 			if err == nil {
 				t.Fatal("Expected error for invalid duration, got nil")
+			}
+		})
+	}
+}
+
+func TestValidate_PageSize(t *testing.T) {
+	tests := []struct {
+		name    string
+		size    int32
+		wantErr bool
+	}{
+		{"valid default", 20, false},
+		{"valid large", 500, false},
+		{"valid minimum", 1, false},
+		{"zero", 0, true},
+		{"negative", -1, true},
+		{"exceeds max", 501, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := NewSentinelConfig()
+			cfg.ResourceType = testResourceType
+			cfg.Clients.HyperFleetAPI.BaseURL = testAPIEndpoint
+			cfg.MessageData = map[string]interface{}{"id": "resource.id"}
+			cfg.MessageDecision = newTestMessageDecision()
+			cfg.Clients.HyperFleetAPI.PageSize = tt.size
+
+			err := cfg.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("PageSize=%d: wantErr=%v, got %v", tt.size, tt.wantErr, err)
 			}
 		})
 	}
@@ -832,5 +861,59 @@ func TestLoadConfig_TopicEmpty(t *testing.T) {
 
 	if cfg.Clients.Broker.Topic != "" {
 		t.Errorf("Expected empty topic, got '%s'", cfg.Clients.Broker.Topic)
+	}
+}
+
+func TestHyperFleetAPIAuthConfig_Validate(t *testing.T) {
+	tests := []struct {
+		name    string
+		wantErr string
+		cfg     HyperFleetAPIAuthConfig
+	}{
+		{
+			name:    "missing token_path",
+			cfg:     HyperFleetAPIAuthConfig{},
+			wantErr: "token_path is required",
+		},
+		{
+			name:    "relative token_path",
+			cfg:     HyperFleetAPIAuthConfig{TokenPath: "token"},
+			wantErr: "token_path must be an absolute path",
+		},
+		{
+			name:    "relative token_path with subdirectory",
+			cfg:     HyperFleetAPIAuthConfig{TokenPath: "secrets/token"},
+			wantErr: "token_path must be an absolute path",
+		},
+		{
+			name:    "negative token_cache_ttl",
+			cfg:     HyperFleetAPIAuthConfig{TokenPath: "/var/run/secrets/token", TokenCacheTTL: -1},
+			wantErr: "token_cache_ttl must not be negative",
+		},
+		{
+			name: "valid absolute path",
+			cfg:  HyperFleetAPIAuthConfig{TokenPath: "/var/run/secrets/hyperfleet/token", TokenCacheTTL: 30 * time.Second},
+		},
+		{
+			name: "valid absolute path zero ttl",
+			cfg:  HyperFleetAPIAuthConfig{TokenPath: "/var/run/secrets/token"},
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.cfg.Validate()
+			if tt.wantErr != "" {
+				if err == nil {
+					t.Fatalf("expected error containing %q, got nil", tt.wantErr)
+				}
+				if !strings.Contains(err.Error(), tt.wantErr) {
+					t.Errorf("expected error containing %q, got %q", tt.wantErr, err.Error())
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("expected no error, got %v", err)
+			}
+		})
 	}
 }

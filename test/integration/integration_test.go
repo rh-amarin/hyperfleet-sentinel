@@ -168,7 +168,11 @@ func TestIntegration_EndToEnd(t *testing.T) {
 	}))
 	defer server.Close()
 
-	hyperfleetClient, _ := client.NewHyperFleetClient(server.URL, 10*time.Second, "test-sentinel", "test")
+	hyperfleetClient, err := client.NewHyperFleetClient(
+		server.URL, 10*time.Second, "test-sentinel", "test", client.DefaultPageSize, "", 0)
+	if err != nil {
+		t.Fatalf("failed to create HyperFleet client: %v", err)
+	}
 	decisionEngine := newTestDecisionEngine(t)
 	log := logger.NewHyperFleetLogger()
 
@@ -243,7 +247,11 @@ func TestIntegration_LabelSelectorFiltering(t *testing.T) {
 	}))
 	defer server.Close()
 
-	hyperfleetClient, _ := client.NewHyperFleetClient(server.URL, 10*time.Second, "test-sentinel", "test")
+	hyperfleetClient, err := client.NewHyperFleetClient(
+		server.URL, 10*time.Second, "test-sentinel", "test", client.DefaultPageSize, "", 0)
+	if err != nil {
+		t.Fatalf("failed to create HyperFleet client: %v", err)
+	}
 	decisionEngine := newTestDecisionEngine(t)
 	log := logger.NewHyperFleetLogger()
 
@@ -329,7 +337,11 @@ func TestIntegration_TSLSyntaxMultipleLabels(t *testing.T) {
 	}))
 	defer server.Close()
 
-	hyperfleetClient, _ := client.NewHyperFleetClient(server.URL, 10*time.Second, "test-sentinel", "test")
+	hyperfleetClient, err := client.NewHyperFleetClient(
+		server.URL, 10*time.Second, "test-sentinel", "test", client.DefaultPageSize, "", 0)
+	if err != nil {
+		t.Fatalf("failed to create HyperFleet client: %v", err)
+	}
 	decisionEngine := newTestDecisionEngine(t)
 	log := logger.NewHyperFleetLogger()
 
@@ -447,7 +459,11 @@ func TestIntegration_BrokerLoggerContext(t *testing.T) {
 	}))
 	defer server.Close()
 
-	hyperfleetClient, _ := client.NewHyperFleetClient(server.URL, 10*time.Second, "test-sentinel", "test")
+	hyperfleetClient, err := client.NewHyperFleetClient(
+		server.URL, 10*time.Second, "test-sentinel", "test", client.DefaultPageSize, "", 0)
+	if err != nil {
+		t.Fatalf("failed to create HyperFleet client: %v", err)
+	}
 	decisionEngine := newTestDecisionEngine(t)
 
 	sentinelConfig := newTestSentinelConfig()
@@ -610,7 +626,8 @@ func TestIntegration_EndToEndSpanHierarchy(t *testing.T) {
 
 	helper := NewHelper()
 
-	hyperfleetClient, clientErr := client.NewHyperFleetClient(server.URL, 10*time.Second, "test-sentinel", "test")
+	hyperfleetClient, clientErr := client.NewHyperFleetClient(
+		server.URL, 10*time.Second, "test-sentinel", "test", client.DefaultPageSize, "", 0)
 	if clientErr != nil {
 		t.Fatalf("failed to create HyperFleet client: %v", clientErr)
 	}

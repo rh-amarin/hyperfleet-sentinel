@@ -37,7 +37,10 @@ make install-hooks
 - Integration tests require Docker/Podman for testcontainers (RabbitMQ, GCP Pub/Sub emulators)
 - `make install-hooks` installs pre-commit hooks configured in `.pre-commit-config.yaml` for commit message and code quality validation on every commit
 - See [docs/testcontainers.md](docs/testcontainers.md) for Docker/Podman configuration
-- See [docs/running-sentinel.md](docs/running-sentinel.md) for detailed runtime instructions
+- See [docs/development.md](docs/development.md) for build, test, and local development
+- See [docs/deployment.md](docs/deployment.md) for Helm deployment and configuration
+- See [docs/sentinel-for-gke-dev.md](docs/sentinel-for-gke-dev.md) for GKE dev deployment
+
 
 ## Repository Structure
 
@@ -171,8 +174,8 @@ QUAY_USER=myusername make image-dev
 # Run with custom broker configuration
 BROKER_CONFIG_FILE=broker.yaml ./bin/sentinel serve --config configs/dev-example.yaml
 
-# For detailed local/GKE deployment instructions, see:
-# docs/running-sentinel.md
+# For detailed local deployment instructions, see docs/development.md
+# For detailed GKE deployment instructions, see docs/sentinel-for-gke-dev.md
 ```
 
 ### Code Generation

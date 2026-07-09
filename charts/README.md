@@ -5,13 +5,14 @@
 HyperFleet Sentinel - Kubernetes service that polls HyperFleet API and publishes CloudEvents
 
 **Homepage:** <https://github.com/openshift-hyperfleet/hyperfleet-sentinel>
+> For the full deployment guide (configuration, broker setup, examples), see the [Deployment Guide](https://github.com/openshift-hyperfleet/hyperfleet-sentinel/blob/main/docs/deployment.md).
 
 ## Installation
 
 ```bash
-helm install hyperfleet-sentinel oci://REGISTRY/hyperfleet-sentinel \
-  --set image.registry=REGISTRY \
-  --set image.repository=ORG/hyperfleet-sentinel \
+helm install hyperfleet-sentinel oci://quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-sentinel-chart \
+  --set image.registry=quay.io \
+  --set image.repository=redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-sentinel \
   --set image.tag=<version>
 ```
 
@@ -25,7 +26,7 @@ helm install hyperfleet-sentinel oci://REGISTRY/hyperfleet-sentinel \
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| replicaCount | int | `1` | Number of sentinel replicas |
+| replicaCount | int | `1` | Number of sentinel replicas. Setting >1 duplicates events; scale via separate Helm releases with non-overlapping resourceSelector values instead. See docs/multi-instance-deployment.md. |
 | image.registry | string | `"CHANGE_ME"` | Container image registry (no default — must be set) |
 | image.repository | string | `"CHANGE_ME"` | Container image repository (no default — must be set) |
 | image.pullPolicy | string | `"Always"` | Image pull policy |
@@ -39,6 +40,7 @@ helm install hyperfleet-sentinel oci://REGISTRY/hyperfleet-sentinel \
 | serviceAccount.name | string | `""` | Override the ServiceAccount name (defaults to the release fullname) |
 | podAnnotations | object | `{}` | Additional annotations applied to all pods |
 | podLabels | object | `{}` | Additional labels applied to all pods |
+| labels | object | `{}` | Custom labels applied to all resources managed by this Helm chart (Deployment, Service, ServiceAccount, ConfigMaps, etc.) Useful for labeling resources for cleanup, tracking, or organization. Example:   labels:     environment: production     team: platform     hyperfleet-e2e-run: e2e-20260615-102422-bb5nfo2d |
 | podSecurityContext | object | `{"fsGroup":65532,"runAsNonRoot":true,"runAsUser":65532}` | Pod-level security context |
 | podSecurityContext.fsGroup | int | `65532` | Filesystem group for volume mounts |
 | podSecurityContext.runAsNonRoot | bool | `true` | Run all containers as non-root |
@@ -53,7 +55,7 @@ helm install hyperfleet-sentinel oci://REGISTRY/hyperfleet-sentinel \
 | podDisruptionBudget | object | `{"enabled":true,"maxUnavailable":1}` | PodDisruptionBudget configuration |
 | podDisruptionBudget.enabled | bool | `true` | Enable the PDB |
 | podDisruptionBudget.maxUnavailable | int | `1` | Maximum number of pods that can be unavailable during disruption |
-| config | object | `{"clients":{"hyperfleetApi":{"baseUrl":"http://hyperfleet-api:8000","timeout":"10s","version":"v1"}},"debugConfig":false,"log":{"format":"json","level":"info","output":"stdout"},"messageData":{"generation":"resource.generation","href":"resource.href","id":"resource.id","kind":"resource.kind"},"messageDecision":{"params":[{"expr":"condition(\"Reconciled\").last_updated_time","name":"ref_time"},{"expr":"condition(\"Reconciled\").status == \"True\"","name":"is_reconciled"},{"expr":"ref_time != \"\"","name":"has_ref_time"},{"expr":"!is_reconciled && resource.generation == 1","name":"is_new_resource"},{"expr":"resource.generation > condition(\"Reconciled\").observed_generation","name":"generation_mismatch"},{"expr":"is_reconciled && has_ref_time && now - timestamp(ref_time) > duration(\"30m\")","name":"reconciled_and_stale"},{"expr":"!is_reconciled && has_ref_time && now - timestamp(ref_time) > duration(\"10s\")","name":"not_reconciled_and_debounced"}],"result":"is_new_resource || generation_mismatch || reconciled_and_stale || not_reconciled_and_debounced"},"pollInterval":"5s","resourceSelector":[{"label":"shard","value":"1"}],"resourceType":"clusters","sentinel":{"name":"hyperfleet-sentinel-{{ .Values.config.resourceType }}"}}` | Sentinel application configuration. All settings in this section generate the ConfigMap consumed by the sentinel. |
+| config | object | See values.yaml | Sentinel application configuration. All settings in this section generate the ConfigMap consumed by the sentinel. |
 | config.sentinel | object | `{"name":"hyperfleet-sentinel-{{ .Values.config.resourceType }}"}` | Sentinel identity settings |
 | config.sentinel.name | string | `"hyperfleet-sentinel-{{ .Values.config.resourceType }}"` | Sentinel component name (templated with shard value when resource selector is used) |
 | config.debugConfig | bool | `false` | Log merged configuration on startup for debugging |
@@ -61,15 +63,21 @@ helm install hyperfleet-sentinel oci://REGISTRY/hyperfleet-sentinel \
 | config.log.level | string | `"info"` | Log level (`debug`, `info`, `warn`, `error`) |
 | config.log.format | string | `"json"` | Log format (`json` or `text`) |
 | config.log.output | string | `"stdout"` | Log output destination |
-| config.clients | object | `{"hyperfleetApi":{"baseUrl":"http://hyperfleet-api:8000","timeout":"10s","version":"v1"}}` | Client configuration |
-| config.clients.hyperfleetApi | object | `{"baseUrl":"http://hyperfleet-api:8000","timeout":"10s","version":"v1"}` | HyperFleet API client settings |
+| config.clients | object | `{"hyperfleetApi":{"auth":{"audience":"hyperfleet-api","enabled":false,"expirationSeconds":3600,"tokenCacheTtl":"30s","tokenPath":"/var/run/secrets/hyperfleet/token"},"baseUrl":"http://hyperfleet-api:8000","timeout":"10s","version":"v1"}}` | Client configuration |
+| config.clients.hyperfleetApi | object | `{"auth":{"audience":"hyperfleet-api","enabled":false,"expirationSeconds":3600,"tokenCacheTtl":"30s","tokenPath":"/var/run/secrets/hyperfleet/token"},"baseUrl":"http://hyperfleet-api:8000","timeout":"10s","version":"v1"}` | HyperFleet API client settings |
 | config.clients.hyperfleetApi.baseUrl | string | `"http://hyperfleet-api:8000"` | API base URL (use in-cluster service name) |
 | config.clients.hyperfleetApi.version | string | `"v1"` | API version |
 | config.clients.hyperfleetApi.timeout | string | `"10s"` | HTTP client timeout |
-| config.resourceType | string | `"clusters"` | Resource type to watch (`clusters` or `nodepools`) |
+| config.clients.hyperfleetApi.auth | object | `{"audience":"hyperfleet-api","enabled":false,"expirationSeconds":3600,"tokenCacheTtl":"30s","tokenPath":"/var/run/secrets/hyperfleet/token"}` | Optional JWT authentication via a Kubernetes projected service account token. When enabled, a projected volume is mounted and the token is sent as a Bearer Authorization header on every API request. |
+| config.clients.hyperfleetApi.auth.enabled | bool | `false` | Enable JWT authentication |
+| config.clients.hyperfleetApi.auth.audience | string | `"hyperfleet-api"` | Audience for the projected service account token |
+| config.clients.hyperfleetApi.auth.tokenPath | string | `"/var/run/secrets/hyperfleet/token"` | Full path where the token file is mounted in the container |
+| config.clients.hyperfleetApi.auth.expirationSeconds | int | `3600` | Token lifetime in seconds; Kubernetes rotates the token before it expires |
+| config.clients.hyperfleetApi.auth.tokenCacheTtl | string | `"30s"` | How long the token is cached in memory before the file is re-read; 0 disables caching |
+| config.resourceType | string | `"clusters"` | Resource type plural to watch (any registered entity type, e.g. `clusters`, `nodepools`, `wifconfigs`) |
 | config.pollInterval | string | `"5s"` | How often to poll the API for resource updates |
 | config.messageDecision | object | See values.yaml for default CEL expressions | CEL-based decision logic that determines whether to publish an event. `params` are named CEL expressions evaluated in dependency order. `result` is a boolean CEL expression using the params. |
-| config.resourceSelector | list | `[{"label":"shard","value":"1"}]` | Resource selector for horizontal sharding. Deploy multiple sentinel instances with different shard values. |
+| config.resourceSelector | list | `[]` | Resource selector for horizontal sharding. Deploy multiple sentinel instances with different shard values. Empty by default (no filtering). Example: resourceSelector: [{label: shard, value: "1"}] |
 | config.messageData | object | `{"generation":"resource.generation","href":"resource.href","id":"resource.id","kind":"resource.kind"}` | CloudEvents data payload configuration. Values are CEL expressions evaluated against the resource. |
 | broker | object | `{"googlepubsub":{"createTopicIfMissing":false,"maxOutstandingMessages":1000,"numGoroutines":10,"projectId":"your-gcp-project-id"},"rabbitmq":{"exchangeType":"topic","url":"amqp://<USER>:<PASSWORD>@rabbitmq.hyperfleet-system.svc.cluster.local:5672/hyperfleet"},"topic":"{{ .Release.Namespace }}-{{ .Values.config.resourceType }}","type":"rabbitmq"}` | Broker configuration for event publishing. **WARNING:** Never commit real credentials to git. Use external secrets management (External Secrets Operator, Sealed Secrets, Vault). |
 | broker.type | string | `"rabbitmq"` | Broker type (`rabbitmq` or `googlepubsub`). See the [broker library](https://github.com/openshift-hyperfleet/hyperfleet-broker). |

@@ -1,7 +1,9 @@
 # Default values for sentinel.
 # This is a YAML-formatted file.
 
-# -- Number of sentinel replicas
+# -- Number of sentinel replicas. Setting >1 duplicates events; scale via
+# separate Helm releases with non-overlapping resourceSelector values instead.
+# See docs/multi-instance-deployment.md.
 replicaCount: 1
 
 image:
@@ -36,6 +38,16 @@ serviceAccount:
 podAnnotations: {}
 # -- Additional labels applied to all pods
 podLabels: {}
+
+# -- Custom labels applied to all resources managed by this Helm chart
+# (Deployment, Service, ServiceAccount, ConfigMaps, etc.)
+# Useful for labeling resources for cleanup, tracking, or organization.
+# Example:
+#   labels:
+#     environment: production
+#     team: platform
+#     hyperfleet-e2e-run: e2e-20260615-102422-bb5nfo2d
+labels: {}
 
 # -- Pod-level security context
 podSecurityContext:
@@ -85,6 +97,7 @@ podDisruptionBudget:
 
 # -- Sentinel application configuration. All settings in this section
 # generate the ConfigMap consumed by the sentinel.
+# @default -- See values.yaml
 config:
   # -- Sentinel identity settings
   sentinel:
@@ -114,8 +127,22 @@ config:
       version: v1
       # -- HTTP client timeout
       timeout: 10s
+      # -- Optional JWT authentication via a Kubernetes projected service account token.
+      # When enabled, a projected volume is mounted and the token is sent as a Bearer
+      # Authorization header on every API request.
+      auth:
+        # -- Enable JWT authentication
+        enabled: false
+        # -- Audience for the projected service account token
+        audience: hyperfleet-api
+        # -- Full path where the token file is mounted in the container
+        tokenPath: /var/run/secrets/hyperfleet/token
+        # -- Token lifetime in seconds; Kubernetes rotates the token before it expires
+        expirationSeconds: 3600
+        # -- How long the token is cached in memory before the file is re-read; 0 disables caching
+        tokenCacheTtl: 30s
 
-  # -- Resource type to watch (`clusters` or `nodepools`)
+  # -- Resource type plural to watch (any registered entity type, e.g. `clusters`, `nodepools`, `wifconfigs`)
   resourceType: clusters
 
   # -- How often to poll the API for resource updates
@@ -134,7 +161,7 @@ config:
       - name: has_ref_time
         expr: 'ref_time != ""'
       - name: is_new_resource
-        expr: '!is_reconciled && resource.generation == 1'
+        expr: 'resource.generation == 1 && !has_ref_time'
       - name: generation_mismatch
         expr: 'resource.generation > condition("Reconciled").observed_generation'
       - name: reconciled_and_stale
@@ -144,10 +171,9 @@ config:
     result: 'is_new_resource || generation_mismatch || reconciled_and_stale || not_reconciled_and_debounced'
 
   # -- Resource selector for horizontal sharding. Deploy multiple sentinel
-  # instances with different shard values.
-  resourceSelector:
-    - label: shard
-      value: "1"
+  # instances with different shard values. Empty by default (no filtering).
+  # Example: resourceSelector: [{label: shard, value: "1"}]
+  resourceSelector: []
 
   # -- CloudEvents data payload configuration. Values are CEL expressions
   # evaluated against the resource.

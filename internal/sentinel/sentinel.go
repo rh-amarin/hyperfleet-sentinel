@@ -135,13 +135,16 @@ func (s *Sentinel) trigger(ctx context.Context) error {
 	// to reduce the result set before CEL evaluation. Currently fetches the full result set
 	// and evaluates each resource in-memory. At large scale, use resource_selector labels
 	// to shard across multiple Sentinel instances.
-	rt := client.ResourceType(s.config.ResourceType)
-	resources, err := s.client.FetchResources(ctx, rt, labelSelector)
+	resources, err := s.client.FetchResources(ctx, s.config.ResourceType, labelSelector)
 	if err != nil {
 		// Record API error
 		pollSpan.RecordError(err)
 		pollSpan.SetStatus(codes.Error, "fetch resources failed")
-		metrics.UpdateAPIErrorsMetric(resourceType, resourceSelector, "fetch_error")
+		errorType := "fetch_error"
+		if client.IsTokenError(err) {
+			errorType = "auth_error"
+		}
+		metrics.UpdateAPIErrorsMetric(resourceType, resourceSelector, errorType)
 		return fmt.Errorf("failed to fetch resources: %w", err)
 	}
 

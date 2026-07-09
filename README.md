@@ -1,347 +1,101 @@
 # hyperfleet-sentinel
 
-HyperFleet Sentinel Service - Kubernetes service that polls HyperFleet API, makes orchestration decisions, and publishes events. Features configurable CEL-based decision logic, horizontal sharding via SentinelConfig CRD, and broker abstraction (GCP Pub/Sub, RabbitMQ, Stub). Centralized reconciliation logic.
+Kubernetes service that polls the HyperFleet API for cluster and nodepool updates, makes orchestration decisions via CEL-based decision logic, and publishes CloudEvents to message brokers. Stateless, horizontally scalable via label-based sharding, delegates all state persistence to the API.
 
-## Development Setup
+## Quick Start
 
-### Prerequisites
+### Deploy the Full Stack
 
-- Go 1.25 or later
-- Docker or Podman
-- Make
-- pre-commit
+Sentinel requires a running message broker and HyperFleet API as well as adapters. The [hyperfleet-infra](https://github.com/openshift-hyperfleet/hyperfleet-infra) repository provides a one-command setup that deploys the complete HyperFleet stack including pre-configured adapters:
 
-### Getting Started
+| Command | What it deploys |
+|---------|-----------------|
+| `make local-up-gcp` | GKE cluster + images + API + adapters + Maestro |
+| `make install-hyperfleet` | Everything on an existing K8s cluster using RabbitMQ (no GCP needed) |
+| `make install-adapters` | Install sample HyperFleet Adapters only |
+| `make install-api` | Install sample HyperFleet API only |
+| `helm install rabbitmq ./helm/rabbitmq` | Install a simple RabbitMQ instance |
+| `make status` | Verify the deployment |
 
-1. **Clone the repository**:
+Make sure you define the following environment variables:
+* `HELMFILE_ENV`: accepted values: `kind`, `gcp`
+* `NAMESPACE`: namespace where HyperFleet components will be deployed
+* `REGISTRY`: The registry namespace from which to pull the images. `quay.io/openshift-hyperfleet` for released images
+* `API_IMAGE_TAG`: image tag for `hyperfleet-api` container image
+* `SENTINEL_IMAGE_TAG`: image tag for `hyperfleet-sentinel` container image
+* `ADAPTER_IMAGE_TAG`: image tag for `hyperfleet-adapter` container image
 
-   ```bash
-   git clone https://github.com/openshift-hyperfleet/hyperfleet-sentinel.git
-   cd hyperfleet-sentinel
-   ```
+See [hyperfleet-infra](https://github.com/openshift-hyperfleet/hyperfleet-infra) for required environment variables and full instructions.
 
-2. **Generate the OpenAPI client**:
-
-   ```bash
-   make generate
-   ```
-
-   This will:
-   - Extract the OpenAPI spec from the [hyperfleet-api-spec](https://github.com/openshift-hyperfleet/hyperfleet-api-spec) Go module (pinned in `go.mod`)
-   - Generate Go client code in `pkg/api/openapi/`
-
-   Both the extracted spec and generated client code are **not committed** to git and must be regenerated locally.
-
-3. **Download dependencies**:
-
-   ```bash
-   make download
-   ```
-
-4. **Build the binary**:
-
-   ```bash
-   make build
-   ```
-
-5. **Run tests**:
-
-   ```bash
-   make test
-   ```
-
-6. **Install git hooks**:
-
-   ```bash
-   make install-hooks
-   ```
-
-### Common Make Targets
-
-- `make help` - Show all available make targets
-- `make generate` - Generate OpenAPI client from spec (Docker/Podman-based)
-- `make build` - Build the sentinel binary
-- `make test` - Run unit tests with coverage
-- `make test-integration` - Run integration tests (requires Docker/Podman)
-- `make test-all` - Run all tests (unit + integration)
-- `make fmt` - Format Go code
-- `make lint` - Run golangci-lint (requires golangci-lint installed)
-- `make clean` - Remove build artifacts and generated code
-
-### Testing
-
-The project uses a hybrid testing approach:
-
-- **Unit tests**: Fast, isolated tests using mocks
-- **Integration tests**: End-to-end tests with real message brokers via testcontainers
-- For simulating HyperFleet API load, see [test/mock-hyperfleet-api](test/mock-hyperfleet-api/).
+### Try Locally
 
 ```bash
-# Run only unit tests (fast)
-make test
-
-# Run integration tests (requires Docker or Podman)
-make test-integration
-
-# Run all tests
-make test-all
+make generate && make build
+export BROKER_RABBITMQ_URL="amqp://guest:guest@localhost:5672/"
+export HYPERFLEET_BROKER_TOPIC=hyperfleet-dev-clusters
+./bin/sentinel serve --config=configs/dev-example.yaml
 ```
 
-Integration tests automatically work with both Docker and Podman. For troubleshooting and advanced configuration, see [docs/testcontainers.md](docs/testcontainers.md).
+See the [Development Guide](docs/development.md) for full setup instructions.
 
-For instructions on running Sentinel locally or on GKE, see [docs/running-sentinel.md](docs/running-sentinel.md).
+## Documentation
 
-### OpenAPI Client Generation
+### For Operators (deploying and running Sentinel)
 
-Run `make generate` to copy the spec from the [hyperfleet-api-spec](https://github.com/openshift-hyperfleet/hyperfleet-api-spec) module and generate the Go client. See [openapi/README.md](openapi/README.md) for schema variants, spec version upgrades, and generator details.
+| Guide | Description |
+|-------|-------------|
+| [Deployment Guide](docs/deployment.md) | Helm deployment, broker setup, examples |
+| [Helm Values Reference](charts/README.md) | Complete chart values |
+| [Configuration Reference](docs/config.md) | YAML schema, CLI flags, env vars |
+| [Operator Guide](docs/sentinel-operator-guide.md) | Decision engine, CEL expressions, concepts |
+| [Scaling](docs/multi-instance-deployment.md) | Horizontal sharding patterns |
+| [Resource Sizing](docs/resource-profiling.md) | CPU/memory at scale |
 
-## Configuration
+### For SREs (monitoring and operations)
 
-The Sentinel service uses YAML-based configuration with environment variable overrides for sensitive data (broker credentials).
+| Guide | Description |
+|-------|-------------|
+| [Metrics](docs/metrics.md) | Metric catalog, PromQL examples, Grafana |
+| [Alerts](docs/alerts.md) | Alert rules, severity, response |
+| [Runbook](docs/runbook.md) | Reliability features, health checks, failure recovery |
 
-### Configuration File
+### For Developers
 
-Create a configuration file based on the examples in the `configs/` directory:
+| Guide | Description |
+|-------|-------------|
+| [Development Guide](docs/development.md) | Setup, build, test, run locally |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Commit standards, PR workflow |
+| [Integration Tests](docs/testcontainers.md) | Testcontainer setup |
 
-- **`configs/gcp-pubsub-example.yaml`** - GCP Pub/Sub configuration
-- **`configs/rabbitmq-example.yaml`** - RabbitMQ configuration
-- **`configs/dev-example.yaml`** - Development configuration
+### Architecture
 
-### Configuration Schema
+| Resource | Description |
+|----------|-------------|
+| [HyperFleet Architecture](https://github.com/openshift-hyperfleet/architecture) | System design |
+| [HyperFleet API Spec](https://github.com/openshift-hyperfleet/hyperfleet-api-spec) | API contract |
+| [Broker Library](https://github.com/openshift-hyperfleet/hyperfleet-broker) | Messaging abstraction |
+| [Infrastructure](https://github.com/openshift-hyperfleet/hyperfleet-infra) | Deployment automation |
 
-#### Required Fields
+## CLI Reference
 
-| Field | Type | Description | Example |
-|-------|------|-------------|---------|
-| `resource_type` | string | Resource to watch (clusters, nodepools) | `clusters` |
-| `hyperfleet_api.endpoint` | string | HyperFleet API base URL (k8s service) | `http://hyperfleet-api.hyperfleet-system.svc.cluster.local:8080` |
+| Command | Description |
+|---------|-------------|
+| `sentinel serve --config config.yaml` | Run the service |
+| `sentinel config-dump --config config.yaml` | Print merged configuration |
+| `sentinel version` | Print version, commit, build date |
 
-#### Optional Fields with Defaults
+Run `sentinel serve --help` for the full flag list.
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `poll_interval` | duration | `5s` | How often to poll the API for resource updates |
-| `message_decision` | object | See below | CEL-based decision logic (params + result) |
-| `hyperfleet_api.timeout` | duration | `5s` | Request timeout for API calls |
-| `resource_selector` | array | `[]` | Label selectors for filtering resources (enables sharding) |
-| `message_data` | map | `{}` | Template fields for CloudEvents data payload |
+## Contributing
 
-#### Resource Selector (Sharding)
-
-The `resource_selector` field enables horizontal scaling by having multiple Sentinel instances watch different resource subsets:
-
-```yaml
-resource_selector:
-  - label: shard
-    value: "1"
-  - label: region
-    value: us-east-1
-```
-
-An empty or omitted `resource_selector` means watch all resources. Multiple selectors use AND logic (all labels must match).
-
-For detailed instructions on deploying multiple Sentinel instances with different resource selectors, see [docs/multi-instance-deployment.md](docs/multi-instance-deployment.md).
-
-#### Message Data
-
-Define custom fields to include in CloudEvents using CEL syntax. The evaluation CEL engine has access to variables:
-
-- `resource` : contains the resource fetched from HyperFleet API
-- `reason` : decision outcome of Sentinel for the resource
-
-```yaml
-message_data:
-  id: resource.id
-  kind: resource.kind
-  href: resource.href
-  generation: resource.generation
-```
-
-CEL expressions can reference any field from the Resource object returned by the API. The example above follows the `ObjectReference` pattern (id, kind, href) with generation for reconciliation tracking.
-
-### Broker Configuration
-
-Broker configuration is managed by the [hyperfleet-broker library](https://github.com/openshift-hyperfleet/hyperfleet-broker). You can configure the broker using either:
-
-1. **broker.yaml file** (see `broker.yaml` in project root for example)
-2. **BROKER_CONFIG_FILE environment variable** (path to your broker config file)
-3. **Direct environment variables** (listed below)
-
-#### Environment Variables (Override broker.yaml)
-
-**RabbitMQ:**
-
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `BROKER_RABBITMQ_URL` | Complete connection URL | `amqp://user:pass@localhost:5672/vhost` |
-
-**Google Pub/Sub:**
-
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `BROKER_GOOGLEPUBSUB_PROJECT_ID` | GCP project ID | `my-gcp-project` |
-| `GOOGLE_APPLICATION_CREDENTIALS` | Service account key path (optional, uses ADC if not set) | `/path/to/key.json` |
-
-**Topic Configuration:**
-
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `HYPERFLEET_BROKER_TOPIC` | Topic name for publishing events | `hyperfleet-dev-clusters` |
-
-The `HYPERFLEET_BROKER_TOPIC` environment variable sets the full topic name where events will be published. When using Helm, the default topic is `{namespace}-{resourceType}` (e.g., `hyperfleet-dev-clusters`, `hyperfleet-dev-nodepools`). This enables isolation between different environments or tenants sharing the same broker. See [Naming Strategy](https://github.com/openshift-hyperfleet/architecture/blob/main/hyperfleet/components/sentinel/sentinel-naming-strategy.md) for details.
-
-For detailed broker configuration options, see the [hyperfleet-broker documentation](https://github.com/openshift-hyperfleet/hyperfleet-broker).
-
-### Running Sentinel
-
-For detailed instructions on running Sentinel locally or deploying to GKE, see [docs/running-sentinel.md](docs/running-sentinel.md).
-
-For Helm chart documentation and configuration options, see [charts/README.md](charts/README.md).
-
-### Configuration Validation
-
-The service validates configuration at startup and will fail fast on errors:
-
-- **Required fields present**: `resource_type`, `hyperfleet_api.endpoint`
-- **Valid enums**: `resource_type` must be clusters/nodepools
-- **Valid durations**: All interval fields must be positive
-- **Valid CEL expressions**: All `message_data` values must be valid CEL expressions
-- **Broker configuration**: Managed by hyperfleet-broker library (see broker.yaml)
-- **API connectivity**: HyperFleet API must be reachable at startup (fails fast via `/clusters` endpoint verification)
-
-### Configuration Examples
-
-#### Minimal Configuration
-
-```yaml
-resource_type: clusters
-hyperfleet_api:
-  endpoint: http://localhost:8000
-```
-
-This uses all defaults. Broker configuration is managed via `broker.yaml` or environment variables (see Broker Configuration section).
-
-#### Production Configuration with Sharding
-
-```yaml
-resource_type: clusters
-poll_interval: 5s
-
-message_decision:
-  params:
-    - name: ref_time
-      expr: 'condition("Reconciled").last_updated_time'
-    - name: is_reconciled
-      expr: 'condition("Reconciled").status == "True"'
-    - name: has_ref_time
-      expr: 'ref_time != ""'
-    - name: is_new_resource
-      expr: '!is_reconciled && resource.generation == 1'
-    - name: generation_mismatch
-      expr: 'resource.generation > condition("Reconciled").observed_generation'
-    - name: reconciled_and_stale
-      expr: 'is_reconciled && has_ref_time && now - timestamp(ref_time) > duration("30m")'
-    - name: not_reconciled_and_debounced
-      expr: '!is_reconciled && has_ref_time && now - timestamp(ref_time) > duration("10s")'
-  result: "is_new_resource || generation_mismatch || reconciled_and_stale || not_reconciled_and_debounced"
-
-resource_selector:
-  - label: shard
-    value: "1"
-
-hyperfleet_api:
-  endpoint: http://hyperfleet-api.hyperfleet-system.svc.cluster.local:8080
-  timeout: 30s
-
-message_data:
-  id: resource.id
-  kind: resource.kind
-  href: resource.href
-  generation: resource.generation
-```
-
-## Observability
-
-The Sentinel service exposes Prometheus metrics on port 8080 at `/metrics` for monitoring and alerting.
-
-### Metrics
-
-Sentinel provides 6 core metrics for comprehensive observability:
-
-| Metric | Type | Description |
-|--------|------|-------------|
-| `hyperfleet_sentinel_pending_resources` | Gauge | Number of resources pending reconciliation |
-| `hyperfleet_sentinel_events_published_total` | Counter | Total events published to message broker |
-| `hyperfleet_sentinel_resources_skipped_total` | Counter | Resources skipped (preconditions not met) |
-| `hyperfleet_sentinel_poll_duration_seconds` | Histogram | Duration of each polling cycle |
-| `hyperfleet_sentinel_api_errors_total` | Counter | Errors when calling HyperFleet API |
-| `hyperfleet_sentinel_broker_errors_total` | Counter | Errors when publishing to message broker |
-
-All metrics include `resource_type` and `resource_selector` labels for filtering.
-
-**For detailed metric descriptions, example queries, and alerting rules**, see [docs/metrics.md](docs/metrics.md).
-
-### Grafana Dashboard
-
-A pre-built Grafana dashboard is available at `deployments/dashboards/sentinel-metrics.json` with 8 visualization panels covering all metrics.
-
-To import:
-
-1. Navigate to Grafana → Dashboards → Import
-2. Upload `deployments/dashboards/sentinel-metrics.json`
-3. Select your Prometheus datasource
-
-### Prometheus Integration
-
-Sentinel supports two monitoring resource types for automatic metrics scraping:
-
-| Environment | Resource | Helm Value |
-|-------------|----------|------------|
-| GKE with Google Cloud Managed Prometheus | PodMonitoring | `monitoring.podMonitoring.enabled=true` |
-| Prometheus Operator (OpenShift, vanilla K8s) | ServiceMonitor | `monitoring.serviceMonitor.enabled=true` |
-
-```bash
-# GKE with GMP (PodMonitoring)
-helm install sentinel ./charts \
-  --namespace hyperfleet-system \
-  --set monitoring.podMonitoring.enabled=true
-
-# Prometheus Operator (ServiceMonitor)
-helm install sentinel ./charts \
-  --namespace hyperfleet-system \
-  --set monitoring.serviceMonitor.enabled=true \
-  --set monitoring.serviceMonitor.additionalLabels.release=prometheus
-```
-
-Both resources can coexist for hybrid environments. See [docs/metrics.md](docs/metrics.md) for detailed configuration options.
-
-#### Alerting
-
-Configure alerts using the PromQL expressions provided in [docs/metrics.md](docs/metrics.md).
-
-Recommended alerts:
-
-- SentinelHighPendingResources - High number of pending resources
-- SentinelAPIErrorRateHigh - High API error rate
-- SentinelBrokerErrorRateHigh - High broker error rate
-- SentinelSlowPolling - Slow polling cycles
-- SentinelNoEventsPublished - No events published despite pending resources
-- SentinelHighSkipRatio - High ratio of skipped resources
-- SentinelDown - Sentinel service is down
-
-See [docs/metrics.md](docs/metrics.md) for complete alerting rules documentation.
+See [CONTRIBUTING.md](CONTRIBUTING.md) and [Development Guide](docs/development.md).
 
 ## Repository Access
 
 All members of the **hyperfleet** team have write access to this repository.
 
-### Steps to Apply for Repository Access
-
-If you're a team member and need access to this repository:
-
-1. **Verify Organization Membership**: Ensure you're a member of the `openshift-hyperfleet` organization
-2. **Check Team Assignment**: Confirm you're added to the hyperfleet team within the organization
-3. **Repository Permissions**: All hyperfleet team members automatically receive write access
-4. **OWNERS File**: Code reviews and approvals are managed through the OWNERS file
+1. Verify you're a member of the `openshift-hyperfleet` organization
+2. Confirm you're added to the hyperfleet team
+3. Code reviews and approvals are managed through the OWNERS file
 
 For access issues, contact a repository administrator or organization owner.

@@ -108,6 +108,11 @@ spec:
             mountPath: /etc/hyperfleet/broker.yaml
             subPath: broker.yaml
             readOnly: true
+          {{- if .Values.config.clients.hyperfleetApi.auth.enabled }}
+          - name: hyperfleet-api-token
+            mountPath: {{ .Values.config.clients.hyperfleetApi.auth.tokenPath | dir }}
+            readOnly: true
+          {{- end }}
         resources:
           {{- toYaml .Values.resources | nindent 12 }}
       volumes:
@@ -117,6 +122,16 @@ spec:
         - name: broker-config
           configMap:
             name: {{ include "sentinel.fullname" . }}-broker-config
+        {{- if .Values.config.clients.hyperfleetApi.auth.enabled }}
+        - name: hyperfleet-api-token
+          projected:
+            defaultMode: 0400
+            sources:
+            - serviceAccountToken:
+                audience: {{ .Values.config.clients.hyperfleetApi.auth.audience | quote }}
+                expirationSeconds: {{ .Values.config.clients.hyperfleetApi.auth.expirationSeconds }}
+                path: {{ .Values.config.clients.hyperfleetApi.auth.tokenPath | base }}
+        {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

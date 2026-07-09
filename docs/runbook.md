@@ -1,10 +1,6 @@
 # HyperFleet Sentinel Runbook
 
-**Status**: Active
-**Owner**: HyperFleet Team
-**Last Updated**: 2026-03-12
-
-**Audience:** **Platform Operations teams** and **SREs** responsible for HyperFleet Sentinel deployments
+> **Audience:** Platform Operations teams and SREs responsible for HyperFleet Sentinel deployments.
 
 ---
 

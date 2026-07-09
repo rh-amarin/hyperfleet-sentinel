@@ -125,7 +125,7 @@ func (e *DecisionEngine) Evaluate(resource *client.Resource, now time.Time) Deci
 	}
 
 	// Build resource map for CEL evaluation
-	resourceMap := resourceToMap(resource)
+	resourceMap := resource.ToMap()
 
 	// Update the conditions lookup for the condition() function binding
 	e.mu.Lock()
@@ -227,38 +227,4 @@ func zeroCondition() map[string]interface{} {
 		"reason":               "",
 		"message":              "",
 	}
-}
-
-// resourceToMap converts a Resource into a plain map for CEL evaluation.
-func resourceToMap(r *client.Resource) map[string]interface{} {
-	m := map[string]interface{}{
-		"id":           r.ID,
-		"href":         r.Href,
-		"kind":         r.Kind,
-		"created_time": r.CreatedTime.Format(time.RFC3339Nano),
-		"updated_time": r.UpdatedTime.Format(time.RFC3339Nano),
-		"generation":   int64(r.Generation),
-	}
-
-	if len(r.Labels) > 0 {
-		labels := make(map[string]interface{}, len(r.Labels))
-		for k, v := range r.Labels {
-			labels[k] = v
-		}
-		m["labels"] = labels
-	}
-
-	if r.OwnerReferences != nil {
-		m["owner_references"] = map[string]interface{}{
-			"id":   r.OwnerReferences.ID,
-			"href": r.OwnerReferences.Href,
-			"kind": r.OwnerReferences.Kind,
-		}
-	}
-
-	if r.Metadata != nil {
-		m["metadata"] = r.Metadata
-	}
-
-	return m
 }

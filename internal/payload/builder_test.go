@@ -147,7 +147,7 @@ func makeTestNodePoolResource() *client.Resource {
 				},
 			},
 		},
-		OwnerReferences: &client.OwnerReference{
+		OwnerReferences: &client.ObjectReference{
 			ID:   "cluster-123",
 			Href: "/api/v1/clusters/cluster-123",
 			Kind: testResourceKind,
@@ -359,5 +359,31 @@ func TestBuildPayload_NestedObjectOmittedWhenAllChildrenMissing(t *testing.T) {
 	}
 	if payload["id"] != testClusterID {
 		t.Errorf("expected id %q, got %v", testClusterID, payload["id"])
+	}
+}
+
+func TestBuildPayload_WithNameSpecReferences(t *testing.T) {
+	buildDef := map[string]interface{}{
+		"id":   "resource.id",
+		"name": "resource.name",
+	}
+	b, err := NewBuilder(buildDef, logger.NewHyperFleetLogger())
+	if err != nil {
+		t.Fatalf("NewBuilder failed: %v", err)
+	}
+
+	resource := makeTestResource()
+	resource.Name = "my-cluster"
+	resource.Spec = map[string]interface{}{"cloud_provider": "gcp"}
+	resource.References = map[string][]client.ObjectReference{
+		"wif_config": {
+			{ID: "wc-1", Kind: "WifConfig", Href: "/api/v1/resources/wc-1"},
+		},
+	}
+
+	payload := b.BuildPayload(context.Background(), resource, "test-reason")
+
+	if payload["name"] != "my-cluster" {
+		t.Errorf("expected name 'my-cluster', got %v", payload["name"])
 	}
 }

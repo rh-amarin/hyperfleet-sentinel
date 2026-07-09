@@ -1,9 +1,5 @@
 # HyperFleet Sentinel Alerts
 
-**Status**: Active
-**Owner**: HyperFleet Team
-**Last Updated**: 2026-03-12
-
 > **Audience:** Developers and SREs setting up monitoring for HyperFleet Sentinel.
 
 ---
@@ -272,7 +268,7 @@ spec:
         component: sentinel
       annotations:
         summary: "High resource skip ratio in Sentinel"
-        description: "{{ $value | humanizePercentage }} of resources are being skipped. This may indicate max_age configuration issues."
+        description: "{{ $value | humanizePercentage }} of resources are being skipped. This may indicate message_decision configuration issues."
 ```
 
 To configure these alerts in **Google Cloud Console**:

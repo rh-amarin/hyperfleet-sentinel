@@ -26,6 +26,11 @@ data:
         base_url: {{ .Values.config.clients.hyperfleetApi.baseUrl | quote }}
         version: {{ .Values.config.clients.hyperfleetApi.version | quote }}
         timeout: {{ .Values.config.clients.hyperfleetApi.timeout | quote }}
+        {{- if .Values.config.clients.hyperfleetApi.auth.enabled }}
+        auth:
+          token_path: {{ .Values.config.clients.hyperfleetApi.auth.tokenPath | quote }}
+          token_cache_ttl: {{ .Values.config.clients.hyperfleetApi.auth.tokenCacheTtl | quote }}
+        {{- end }}
 
       # Broker client
       broker:

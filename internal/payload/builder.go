@@ -3,7 +3,6 @@ package payload
 import (
 	"context"
 	"fmt"
-	"time"
 
 	"github.com/google/cel-go/cel"
 	"github.com/openshift-hyperfleet/hyperfleet-sentinel/internal/client"
@@ -131,66 +130,7 @@ func compileNode(raw interface{}, env *cel.Env) (*compiledNode, error) {
 // The reason is available to CEL expressions as the "reason" variable.
 // ctx is used for correlated warning logs if CEL evaluation fails.
 func (b *Builder) BuildPayload(ctx context.Context, resource *client.Resource, reason string) map[string]interface{} {
-	return b.evalCompiledMap(ctx, b.compiled, resourceToMap(resource), reason)
-}
-
-// resourceToMap converts a Resource into a plain map[string]interface{} for CEL evaluation.
-// Time fields are formatted as RFC3339Nano strings to match their JSON representation.
-// Status data is accessed only through conditions (no flattened fields).
-func resourceToMap(r *client.Resource) map[string]interface{} {
-	status := map[string]interface{}{}
-	if len(r.Status.Conditions) > 0 {
-		conditions := make([]interface{}, len(r.Status.Conditions))
-		for i, c := range r.Status.Conditions {
-			cond := map[string]interface{}{
-				"type":                 c.Type,
-				"status":               c.Status,
-				"last_transition_time": c.LastTransitionTime.Format(time.RFC3339Nano),
-				"last_updated_time":    c.LastUpdatedTime.Format(time.RFC3339Nano),
-				"observed_generation":  c.ObservedGeneration,
-			}
-			if c.Reason != "" {
-				cond["reason"] = c.Reason
-			}
-			if c.Message != "" {
-				cond["message"] = c.Message
-			}
-			conditions[i] = cond
-		}
-		status["conditions"] = conditions
-	}
-
-	m := map[string]interface{}{
-		"id":           r.ID,
-		"href":         r.Href,
-		"kind":         r.Kind,
-		"created_time": r.CreatedTime.Format(time.RFC3339Nano),
-		"updated_time": r.UpdatedTime.Format(time.RFC3339Nano),
-		"generation":   r.Generation,
-		"status":       status,
-	}
-
-	if len(r.Labels) > 0 {
-		labels := make(map[string]interface{}, len(r.Labels))
-		for k, v := range r.Labels {
-			labels[k] = v
-		}
-		m["labels"] = labels
-	}
-
-	if r.OwnerReferences != nil {
-		m["owner_references"] = map[string]interface{}{
-			"id":   r.OwnerReferences.ID,
-			"href": r.OwnerReferences.Href,
-			"kind": r.OwnerReferences.Kind,
-		}
-	}
-
-	if r.Metadata != nil {
-		m["metadata"] = r.Metadata
-	}
-
-	return m
+	return b.evalCompiledMap(ctx, b.compiled, resource.ToMap(), reason)
 }
 
 // evalCompiledMap evaluates a compiled map against the resource and reason.

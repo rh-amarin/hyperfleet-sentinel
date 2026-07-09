@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -79,11 +80,35 @@ type ClientsConfig struct {
 	Broker        *BrokerConfig        `yaml:"broker,omitempty" mapstructure:"broker"`
 }
 
+// HyperFleetAPIAuthConfig defines optional JWT authentication via a Kubernetes
+// projected service account token. When set, the bearer token is read from
+// TokenPath and injected into every API request.
+type HyperFleetAPIAuthConfig struct {
+	TokenPath     string        `yaml:"token_path" mapstructure:"token_path"`
+	TokenCacheTTL time.Duration `yaml:"token_cache_ttl" mapstructure:"token_cache_ttl"`
+}
+
+// Validate returns an error if the auth config is incomplete.
+func (a *HyperFleetAPIAuthConfig) Validate() error {
+	if a.TokenPath == "" {
+		return fmt.Errorf("token_path is required")
+	}
+	if !filepath.IsAbs(a.TokenPath) {
+		return fmt.Errorf("token_path must be an absolute path, got %q", a.TokenPath)
+	}
+	if a.TokenCacheTTL < 0 {
+		return fmt.Errorf("token_cache_ttl must not be negative")
+	}
+	return nil
+}
+
 // HyperFleetAPIConfig defines the HyperFleet API client configuration
 type HyperFleetAPIConfig struct {
-	BaseURL string        `yaml:"base_url" mapstructure:"base_url"`
-	Version string        `yaml:"version,omitempty" mapstructure:"version"`
-	Timeout time.Duration `yaml:"timeout" mapstructure:"timeout"`
+	Auth     *HyperFleetAPIAuthConfig `yaml:"auth,omitempty" mapstructure:"auth"`
+	BaseURL  string                   `yaml:"base_url" mapstructure:"base_url"`
+	Version  string                   `yaml:"version,omitempty" mapstructure:"version"`
+	Timeout  time.Duration            `yaml:"timeout" mapstructure:"timeout"`
+	PageSize int32                    `yaml:"page_size,omitempty" mapstructure:"page_size"`
 }
 
 // BrokerConfig contains broker configuration
@@ -114,7 +139,7 @@ func DefaultMessageDecision() *MessageDecisionConfig {
 			{Name: "ref_time", Expr: `condition("Reconciled").last_updated_time`},
 			{Name: "is_reconciled", Expr: `condition("Reconciled").status == "True"`},
 			{Name: "has_ref_time", Expr: `ref_time != ""`},
-			{Name: "is_new_resource", Expr: `!is_reconciled && resource.generation == 1`},
+			{Name: "is_new_resource", Expr: `resource.generation == 1 && !has_ref_time`},
 			{Name: "generation_mismatch", Expr: `resource.generation > condition("Reconciled").observed_generation`},
 			{Name: "reconciled_and_stale", Expr: `is_reconciled && has_ref_time && now - timestamp(ref_time) > duration("30m")`},
 			{
@@ -141,8 +166,9 @@ func NewSentinelConfig() *SentinelConfig {
 		},
 		Clients: ClientsConfig{
 			HyperFleetAPI: &HyperFleetAPIConfig{
-				Version: "v1",
-				Timeout: 10 * time.Second,
+				Version:  "v1",
+				Timeout:  10 * time.Second,
+				PageSize: 20,
 			},
 			Broker: &BrokerConfig{},
 		},
@@ -157,35 +183,39 @@ func NewSentinelConfig() *SentinelConfig {
 // Note: Uses "::" as key delimiter to avoid conflicts with dots in YAML keys
 // Complex types (maps, slices) are intentionally excluded — they cannot be expressed as scalar env vars.
 var viperKeyMappings = map[string]string{
-	"debug_config":                      "DEBUG_CONFIG",
-	"sentinel::name":                    "SENTINEL_NAME",
-	"log::level":                        "LOG_LEVEL",
-	"log::format":                       "LOG_FORMAT",
-	"log::output":                       "LOG_OUTPUT",
-	"clients::hyperfleet_api::base_url": "API_BASE_URL",
-	"clients::hyperfleet_api::version":  "API_VERSION",
-	"clients::hyperfleet_api::timeout":  "API_TIMEOUT",
-	"clients::broker::topic":            "BROKER_TOPIC",
-	"resource_type":                     "RESOURCE_TYPE",
-	"poll_interval":                     "POLL_INTERVAL",
-	"tracing_enabled":                   "TRACING_ENABLED",
+	"debug_config":                                   "DEBUG_CONFIG",
+	"sentinel::name":                                 "SENTINEL_NAME",
+	"log::level":                                     "LOG_LEVEL",
+	"log::format":                                    "LOG_FORMAT",
+	"log::output":                                    "LOG_OUTPUT",
+	"clients::hyperfleet_api::base_url":              "API_BASE_URL",
+	"clients::hyperfleet_api::version":               "API_VERSION",
+	"clients::hyperfleet_api::timeout":               "API_TIMEOUT",
+	"clients::hyperfleet_api::page_size":             "API_PAGE_SIZE",
+	"clients::hyperfleet_api::auth::token_path":      "API_AUTH_TOKEN_PATH",
+	"clients::hyperfleet_api::auth::token_cache_ttl": "API_AUTH_TOKEN_CACHE_TTL",
+	"clients::broker::topic":                         "BROKER_TOPIC",
+	"resource_type":                                  "RESOURCE_TYPE",
+	"poll_interval":                                  "POLL_INTERVAL",
+	"tracing_enabled":                                "TRACING_ENABLED",
 }
 
 // cliFlags defines mappings from CLI flag names to config paths
 // Note: Uses "::" as key delimiter to avoid conflicts with dots in YAML keys
 var cliFlags = map[string]string{
-	"debug-config":            "debug_config",
-	"name":                    "sentinel::name",
-	"hyperfleet-api-base-url": "clients::hyperfleet_api::base_url",
-	"hyperfleet-api-version":  "clients::hyperfleet_api::version",
-	"hyperfleet-api-timeout":  "clients::hyperfleet_api::timeout",
-	"broker-topic":            "clients::broker::topic",
-	"resource-type":           "resource_type",
-	"poll-interval":           "poll_interval",
-	"log-level":               "log::level",
-	"log-format":              "log::format",
-	"log-output":              "log::output",
-	"tracing-enabled":         "tracing_enabled",
+	"debug-config":             "debug_config",
+	"name":                     "sentinel::name",
+	"hyperfleet-api-base-url":  "clients::hyperfleet_api::base_url",
+	"hyperfleet-api-version":   "clients::hyperfleet_api::version",
+	"hyperfleet-api-timeout":   "clients::hyperfleet_api::timeout",
+	"hyperfleet-api-page-size": "clients::hyperfleet_api::page_size",
+	"broker-topic":             "clients::broker::topic",
+	"resource-type":            "resource_type",
+	"poll-interval":            "poll_interval",
+	"log-level":                "log::level",
+	"log-format":               "log::format",
+	"log-output":               "log::output",
+	"tracing-enabled":          "tracing_enabled",
 }
 
 // LoadConfig loads configuration from YAML file with environment variable and CLI flag overrides
@@ -288,6 +318,11 @@ var fieldRemediations = map[string]fieldRemediation{
 		Env:  "HYPERFLEET_API_BASE_URL",
 		File: "clients.hyperfleet_api.base_url",
 	},
+	"clients.hyperfleet_api.page_size": {
+		Flag: "--hyperfleet-api-page-size",
+		Env:  "HYPERFLEET_API_PAGE_SIZE",
+		File: "clients.hyperfleet_api.page_size",
+	},
 	"poll_interval": {
 		Flag: "--poll-interval",
 		Env:  "HYPERFLEET_POLL_INTERVAL",
@@ -341,18 +376,29 @@ func (c *SentinelConfig) Validate() error {
 		return validationErr("resource_type", "required")
 	}
 
-	validResourceTypes := []string{"clusters", "nodepools"}
-	if !contains(validResourceTypes, c.ResourceType) {
-		return validationErr("resource_type", fmt.Sprintf("invalid value %q (must be one of: %s)",
-			c.ResourceType, strings.Join(validResourceTypes, ", ")))
-	}
-
 	if c.Clients.HyperFleetAPI == nil {
 		return validationErr("clients.hyperfleet_api", "required")
 	}
 
 	if c.Clients.HyperFleetAPI.BaseURL == "" {
 		return validationErr("clients.hyperfleet_api.base_url", "required")
+	}
+
+	if c.Clients.HyperFleetAPI.Timeout <= 0 {
+		return validationErr("clients.hyperfleet_api.timeout", "must be positive",
+			c.Clients.HyperFleetAPI.Timeout.String())
+	}
+
+	if c.Clients.HyperFleetAPI.PageSize <= 0 || c.Clients.HyperFleetAPI.PageSize > 500 {
+		return validationErr("clients.hyperfleet_api.page_size",
+			"must be between 1 and 500",
+			fmt.Sprintf("%d", c.Clients.HyperFleetAPI.PageSize))
+	}
+
+	if c.Clients.HyperFleetAPI.Auth != nil {
+		if err := c.Clients.HyperFleetAPI.Auth.Validate(); err != nil {
+			return fmt.Errorf("clients.hyperfleet_api.auth: %w", err)
+		}
 	}
 
 	if c.PollInterval <= 0 {
@@ -429,16 +475,6 @@ func validateMessageDataLeaves(data map[string]interface{}, path string) error {
 		}
 	}
 	return nil
-}
-
-// contains checks if a string slice contains a value
-func contains(slice []string, value string) bool {
-	for _, v := range slice {
-		if v == value {
-			return true
-		}
-	}
-	return false
 }
 
 // RedactedCopy returns a deep copy of the config. Use this copy when logging

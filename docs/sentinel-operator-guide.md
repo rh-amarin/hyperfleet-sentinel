@@ -1,8 +1,5 @@
 # HyperFleet Sentinel Operator Guide
 
-**Status**: Active
-**Owner**: HyperFleet Team
-**Last Updated**: 2026-03-12
 > **Audience:** Operators deploying and configuring Sentinel service.
 
 This comprehensive guide teaches operators how to deploy, configure, and operate the HyperFleet Sentinel service—a polling-based event publisher that drives cluster lifecycle orchestration.
@@ -103,7 +100,7 @@ When Sentinel polls the HyperFleet API, it retrieves cluster or nodepool resourc
 - **`resource`** — the API resource as a map (`id`, `kind`, `href`, `generation`, `created_time`, `updated_time`, `labels`, `owner_references`, `metadata`)
 - **`now`** — the current evaluation timestamp (`timestamp` type)
 
-The **`condition(name)`** CEL function looks up a status condition by type name (e.g., `condition("Ready")`). Each condition exposes: `status`, `observed_generation`, `last_updated_time`, `last_transition_time`, `reason`, `message`. If the condition is absent, all fields are zero values (empty strings, `0` for `observed_generation`), so CEL expressions can guard safely with `ref_time != ""`.
+The **`condition(name)`** CEL function looks up a status condition by type name (e.g., `condition("Reconciled")`). Each condition exposes: `status`, `observed_generation`, `last_updated_time`, `last_transition_time`, `reason`, `message`. If the condition is absent, all fields are zero values (empty strings, `0` for `observed_generation`), so CEL expressions can guard safely with `ref_time != ""`.
 
 #### 2.1.1 How the Engine Works
 
@@ -130,7 +127,7 @@ When `message_decision` is omitted from the config file, Sentinel uses the follo
 | `ref_time` | `condition("Reconciled").last_updated_time` | Reference timestamp from Reconciled condition |
 | `is_reconciled` | `condition("Reconciled").status == "True"` | Resource reconciled status |
 | `has_ref_time` | `ref_time != ""` | Guard: Reconciled condition exists |
-| `is_new_resource` | `!is_reconciled && resource.generation == 1` | New resource: never been processed |
+| `is_new_resource` | `resource.generation == 1 && !has_ref_time` | New resource: no Reconciled condition yet |
 | `generation_mismatch` | `resource.generation > condition("Reconciled").observed_generation` | Spec changed but not yet processed |
 | `reconciled_and_stale` | `is_reconciled && has_ref_time && now - timestamp(ref_time) > duration("30m")` | Stable resource drifting past 30 min |
 | `not_reconciled_and_debounced` | `!is_reconciled && has_ref_time && now - timestamp(ref_time) > duration("10s")` | Transitional resource debounced past 10 s |
@@ -139,7 +136,7 @@ When `message_decision` is omitted from the config file, Sentinel uses the follo
 
 **What each trigger covers:**
 
-- **`is_new_resource`** — Catches resources with `generation == 1` that are not yet reconciled, acting as a proxy for "never been processed". Publishes within one poll interval of creation.
+- **`is_new_resource`** — Catches brand-new resources with `generation == 1` that have no Reconciled condition yet (adapter has never seen them). Publishes within one poll interval of creation. Once the adapter creates the Reconciled condition, `not_reconciled_and_debounced` takes over with its 10 s debounce.
 - **`generation_mismatch`** — Catches spec changes immediately: the HyperFleet API increments `generation` on every spec update; adapters increment `observed_generation` on the Reconciled condition as they process it. A gap means unprocessed changes.
 - **`reconciled_and_stale`** — Ensures eventual consistency on stable resources by re-publishing periodically even when the spec is in sync, handling external drift and transient failures.
 - **`not_reconciled_and_debounced`** — Drives faster re-publishing for transitional resources, while the debounce prevents event storms.
@@ -230,8 +227,9 @@ graph TB
 
 1. **No Coordination**: Sentinel instances operate independently with no coordination
 2. **Coverage Responsibility**: Operators must ensure all resources are covered by selectors
-3. **Overlap Allowed**: Multiple instances can watch the same resource (events will be duplicated)
-4. **Gaps Dangerous**: Resources not matching any selector will never reconcile
+3. **Gaps Dangerous**: Resources not matching any selector will never reconcile
+
+> **Important**: Multiple instances watching the same resource **will** produce duplicate events. Always use non-overlapping `resource_selector` values across instances. Do not increase `replicaCount` to scale — deploy separate instances with distinct selectors instead. See the [Known Limitations](multi-instance-deployment.md#known-limitations) section for details.
 
 **Broker Topic Isolation:**
 
@@ -529,7 +527,7 @@ export HYPERFLEET_BROKER_TOPIC="hyperfleet-prod-clusters"
 # No GOOGLE_APPLICATION_CREDENTIALS needed - Workload Identity handles authentication
 ```
 
-For Workload Identity setup instructions, see [Configure Workload Identity](running-sentinel.md#5-configure-workload-identity).
+For Workload Identity setup instructions, see [Configure Workload Identity](deployment.md#workload-identity-for-pubsub).
 
 **Broker Configuration Reference:**
 
@@ -611,7 +609,7 @@ Follow this checklist to ensure successful Sentinel deployment and operation.
 - [ ] Install Sentinel using Helm chart:
 
   ```bash
-  helm install sentinel ./charts \
+  helm install sentinel oci://quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-sentinel-chart \
     --namespace hyperfleet-system \
     --values values.yaml
   ```
@@ -656,7 +654,7 @@ Follow this checklist to ensure successful Sentinel deployment and operation.
   - `published` - Number of events published (`message_decision` result was `true`)
   - `skipped` - Number of resources skipped (no reconciliation needed)
 
-For detailed deployment guidance, see [docs/running-sentinel.md](running-sentinel.md)
+For detailed deployment guidance, see [docs/deployment.md](deployment.md)
 
 ---
 
@@ -664,7 +662,7 @@ For detailed deployment guidance, see [docs/running-sentinel.md](running-sentine
 
 ### Documentation
 
-- **[Running Sentinel](running-sentinel.md)** - Detailed guide for local and GKE deployments
+- **[Running Sentinel](sentinel-for-gke-dev.md)** - Detailed guide for GKE deployments
 - **[Metrics Documentation](metrics.md)** - Complete metrics catalog with PromQL examples
 - **[Multi-Instance Deployment](multi-instance-deployment.md)** - Horizontal scaling strategies
 - **[Testcontainers Documentation](testcontainers.md)** - Integration testing with testcontainers

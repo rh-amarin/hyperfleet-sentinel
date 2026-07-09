@@ -35,13 +35,19 @@ clients:
     base_url: http://hyperfleet-api.hyperfleet-system.svc.cluster.local:8080
     version: "v1"
     timeout: 10s
+    # page_size: 20
+    # Optional: JWT authentication via Kubernetes projected service account token.
+    # Requires auth.enabled=true in the Helm chart to mount the projected volume.
+    # auth:
+    #   token_path: /var/run/secrets/hyperfleet/token
+    #   token_cache_ttl: 30s  # 0 disables caching
 
   # Broker configuration
   # Note: broker implementation details (RabbitMQ URL, etc.) are in broker.yaml
   broker:
     topic: ""  # Can be overridden by HYPERFLEET_BROKER_TOPIC
 
-# Resource type to watch - must be one of: clusters, nodepools
+# Resource type plural to watch (any registered entity type, e.g. clusters, nodepools, wifconfigs)
 resource_type: clusters
 
 # How often to poll the HyperFleet API for resource updates.
@@ -59,7 +65,7 @@ message_decision:
     - name: has_ref_time
       expr: 'ref_time != ""'
     - name: is_new_resource
-      expr: '!is_reconciled && resource.generation == 1'
+      expr: 'resource.generation == 1 && !has_ref_time'
     - name: generation_mismatch
       expr: 'resource.generation > condition("Reconciled").observed_generation'
     - name: reconciled_and_stale
@@ -102,7 +108,7 @@ message_data:
   generation: "resource.generation"
 
 #  For nodepools, the message should contain owner_references
-#  
+#
 #  owner_references:
 #    id: "resource.owner_references.id"
 #    href: "resource.owner_references.href"

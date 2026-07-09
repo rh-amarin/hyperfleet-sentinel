@@ -1,9 +1,5 @@
 # HyperFleet Sentinel Metrics
 
-**Status**: Active
-**Owner**: HyperFleet Team
-**Last Updated**: 2026-03-12
-
 > **Audience:** Developers and SREs setting up monitoring for HyperFleet Sentinel.
 
 This document describes the Prometheus metrics exposed by the HyperFleet Sentinel service for monitoring and observability.
@@ -322,7 +318,7 @@ gcloud container clusters update CLUSTER_NAME \
 The Helm chart automatically creates a PodMonitoring resource when deployed:
 
 ```bash
-helm install sentinel ./charts \
+helm install sentinel oci://quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-sentinel-chart \
   --namespace hyperfleet-system \
   --create-namespace \
   --set monitoring.podMonitoring.enabled=true
@@ -358,7 +354,7 @@ For clusters using [Prometheus Operator](https://github.com/prometheus-operator/
 Deploy Sentinel with ServiceMonitor enabled:
 
 ```bash
-helm install sentinel ./charts \
+helm install sentinel oci://quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-sentinel-chart \
   --namespace hyperfleet-system \
   --create-namespace \
   --set monitoring.serviceMonitor.enabled=true
@@ -375,7 +371,7 @@ kubectl get prometheus -A -o jsonpath='{.items[*].spec.serviceMonitorSelector}'
 Then set the matching labels:
 
 ```bash
-helm install sentinel ./charts \
+helm install sentinel oci://quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/hyperfleet-sentinel-chart \
   --namespace hyperfleet-system \
   --set monitoring.serviceMonitor.enabled=true \
   --set monitoring.serviceMonitor.additionalLabels.release=prometheus

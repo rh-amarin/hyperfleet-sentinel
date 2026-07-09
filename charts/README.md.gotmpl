@@ -7,13 +7,14 @@
 {{ template "chart.description" . }}
 
 {{ template "chart.homepageLine" . }}
+> For the full deployment guide (configuration, broker setup, examples), see the [Deployment Guide](https://github.com/openshift-hyperfleet/hyperfleet-sentinel/blob/main/docs/deployment.md).
 
 ## Installation
 
 ```bash
-helm install {{ template "chart.name" . }} oci://REGISTRY/{{ template "chart.name" . }} \
-  --set image.registry=REGISTRY \
-  --set image.repository=ORG/{{ template "chart.name" . }} \
+helm install {{ template "chart.name" . }} oci://quay.io/redhat-services-prod/hyperfleet-tenant/hyperfleet/{{ template "chart.name" . }}-chart \
+  --set image.registry=quay.io \
+  --set image.repository=redhat-services-prod/hyperfleet-tenant/hyperfleet/{{ template "chart.name" . }} \
   --set image.tag=<version>
 ```
 

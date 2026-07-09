@@ -56,6 +56,7 @@ generate: $(OAPI_CODEGEN) download ## Generate OpenAPI types using oapi-codegen
 	@rm -f openapi/openapi.yaml
 	@cp "$$($(GO) list -m -f '{{.Dir}}' github.com/openshift-hyperfleet/hyperfleet-api-spec)/schemas/$(VARIANT)/openapi.yaml" openapi/openapi.yaml
 	$(OAPI_CODEGEN) --config openapi/oapi-codegen.yaml openapi/openapi.yaml
+	@printf '// DO NOT REMOVE\npackage openapi\n' > pkg/api/openapi/stub.go
 
 ##@ Development
 
